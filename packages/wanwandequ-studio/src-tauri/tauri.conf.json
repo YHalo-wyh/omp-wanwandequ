@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Wanwandequ Studio",
+  "version": "0.2.0",
+  "identifier": "cn.yhalo.wanwandequ.studio",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build:web",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Wanwandequ Studio",
+        "width": 1500,
+        "height": 900,
+        "minWidth": 980,
+        "minHeight": 680,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "externalBin": ["binaries/omp-wanwandequ"],
+    "shortDescription": "Autonomous CTF workspace powered by OMP-Wanwandequ",
+    "longDescription": "Lightweight desktop IDE shell for OMP-Wanwandequ with terminal, persistent competition dashboard, credential management and audit-friendly workspaces.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
