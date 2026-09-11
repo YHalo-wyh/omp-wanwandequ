@@ -18,7 +18,9 @@ process.env.WANWANDEQU_LOG_DIR ||= audit.logDir;
 
 function normalizeWanwanArgv(argv: string[]): string[] {
 	const first = argv[0];
-	if (!first) return ["wq", "help"];
+	// Double-clicking the standalone exe or typing `omp-wanwandequ` now opens
+	// the native interactive WQ TUI instead of printing help and immediately exiting.
+	if (!first) return ["wq", "chat"];
 
 	// Compiled OMP worker/subprocess selectors and root runtime flags must pass
 	// through untouched; the underlying OMP engine re-enters this same binary.
@@ -28,7 +30,7 @@ function normalizeWanwanArgv(argv: string[]): string[] {
 	if (first === "wq") return argv;
 
 	// The public binary presents WQ actions directly:
-	//   omp-wanwandequ run / solve / bench / doctor / agents / presets
+	//   omp-wanwandequ / chat / run / solve / bench / doctor / agents / presets
 	return ["wq", ...argv];
 }
 
