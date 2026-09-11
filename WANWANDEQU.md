@@ -1,13 +1,68 @@
 # OMP-Wanwandequ
 
-`omp-wanwandequ` is a standalone competition agent derived from OMP v18.1.17 for the 2026 Bay Area Cup autonomous CTF challenge. It installs beside normal OMP and uses its own config root (`~/.omp-wanwandequ`), so `omp` and `omp-wanwandequ` do not overwrite each other's sessions or credentials.
+`omp-wanwandequ` is a standalone competition agent derived from OMP v18.1.17 for the 2026 Bay Area Cup autonomous CTF challenge. It installs beside normal OMP and uses its own config root (`~/.omp-wanwandequ`), so `omp` and `omp-wanwandequ` do not overwrite each other's sessions.
 
-## Public command
+## Open-box Windows setup
 
-The user-facing command is **not** `omp wq`:
+For the current rolling competition build, open PowerShell **inside the directory you want to use as the contest working directory** and run one command:
+
+```powershell
+irm https://raw.githubusercontent.com/YHalo-wyh/omp-wanwandequ/wq/competition-v1/scripts/install-and-run-wanwandequ.ps1 | iex
+```
+
+The script will:
+
+1. Download the current `wq-dev` Windows x64 build.
+2. Verify the published SHA-256 when present.
+3. Install it as `%LOCALAPPDATA%\Programs\omp-wanwandequ\omp-wanwandequ.exe`.
+4. Add that directory to the current and user PATH without replacing normal `omp`.
+5. On first setup, copy only reusable config/model/auth files from `~/.omp` into the standalone `~/.omp-wanwandequ` tree when those files exist. It does not copy sessions, logs, workspaces or caches.
+6. Create `./logs` in the launch working directory.
+7. Run `doctor`, then open a new PowerShell terminal in the same working directory and start the interactive agent.
+
+After installation, typing:
+
+```powershell
+omp-wanwandequ
+```
+
+opens the native Wanwandequ OMP TUI. Double-clicking the standalone EXE also enters the interactive agent instead of printing help and closing immediately.
+
+To install without opening the interactive terminal:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/YHalo-wyh/omp-wanwandequ/wq/competition-v1/scripts/install-and-run-wanwandequ.ps1))) -NoLaunch
+```
+
+## Audit logs
+
+Every standalone invocation mirrors console output into the **launch working directory**:
 
 ```text
+<workdir>/logs/omp-wanwandequ-YYYYMMDD-HHMMSS.log
+```
+
+The header records start time, working directory and redacted command-line arguments. `--token` values are never written into the audit header. Competition mode additionally preserves per-challenge visit stdout/stderr and persistent state under the run root, so the original solving trail can be inspected after the round.
+
+Launch the final competition from the directory you want the organizer to inspect, for example:
+
+```powershell
+mkdir D:\BayAreaCup\final -Force
+cd D:\BayAreaCup\final
+$env:WQ_TEAM_TOKEN = "<team-token>"
+omp-wanwandequ run --preset turbo
+```
+
+The resulting `logs/`, `workspaces/` and `.wq/` state all stay under that run directory.
+
+## Public commands
+
+```text
+omp-wanwandequ                         interactive Wanwandequ TUI
+omp-wanwandequ chat                    explicit TUI form
 omp-wanwandequ doctor
+omp-wanwandequ agents
+omp-wanwandequ presets
 omp-wanwandequ solve <challenge>
 omp-wanwandequ bench <historical-challenge>
 omp-wanwandequ run
@@ -32,22 +87,6 @@ WANWANDEQU_PROVIDER=<provider-id>
 ```
 
 and define that provider in the isolated Wanwandequ `models.yml`. The model id remains `deepseek-v4-flash`.
-
-## Install
-
-After a GitHub Release contains the branded binaries, Windows PowerShell installation is:
-
-```powershell
-irm https://raw.githubusercontent.com/YHalo-wyh/omp-wanwandequ/main/scripts/install-wanwandequ.ps1 | iex
-```
-
-Linux/macOS:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/YHalo-wyh/omp-wanwandequ/main/scripts/install-wanwandequ.sh | bash
-```
-
-The release assets are named `omp-wanwandequ-windows-x64.exe`, `omp-wanwandequ-linux-x64`, and corresponding ARM/macOS variants. Development is currently on `wq/competition-v1`; do not use the install one-liners until that branch is merged/released.
 
 ## Competition architecture
 
@@ -76,6 +115,22 @@ Persistent external state
 
 The solver child never receives `WQ_TEAM_TOKEN`; only the controller can reset or submit.
 
+## Bundled Skills
+
+The standalone binary contains authored fast-path playbooks for:
+
+```text
+wanwandequ-pwn
+wanwandequ-reverse
+wanwandequ-web
+wanwandequ-crypto
+wanwandequ-forensics
+wanwandequ-protocol
+wanwandequ-incident
+```
+
+At solve start they are materialized into the isolated challenge workspace as normal OMP Skills, so the parent and delegated subagents discover the same category playbooks. A category hint routes to the relevant `skill://wanwandequ-*` playbook before deep analysis.
+
 ## Why specialist + Intent lanes
 
 Running four cold full solvers wastes wall-clock on duplicate `file/strings/checksec`, duplicate route discovery, and repeated context setup. Wanwandequ instead spends concurrency on different causal branches. One category specialist carries a concise structured Skill; remaining lanes test mutually distinct hypotheses. A promising lane is continued with `hub` instead of discarded.
@@ -93,8 +148,6 @@ wq-web
 wq-crypto
 wq-forensics
 ```
-
-This is intentionally aligned with the contest's Web, PWN, reverse, crypto and forensics coverage and with its explicit emphasis on prompt engineering, RAG/knowledge organization and structured Skill development.
 
 ## Platform integration
 
@@ -142,9 +195,9 @@ omp-wanwandequ bench .\history\pwn1.zip --category pwn --expect "flag{known}" --
 
 Compare solve rate and median time-to-flag for `safe/turbo/max`, inner lane counts, thinking levels and advisor on/off. Keep only changes that improve repeated runs; do not tune from a single lucky solve.
 
-## Build
+## Build and rolling release
 
-Focused CI type-checks and tests WQ code, validates the branded release build plan, and then cross-builds a Windows x64 artifact from `packages/coding-agent/src/wanwandequ-cli.ts`:
+Focused CI type-checks and tests WQ code, stages the matching Windows native addon, cross-builds `omp-wanwandequ-windows-x64.exe`, emits SHA-256, and publishes the successful branch build to the rolling prerelease tag `wq-dev`.
 
 ```bash
 bun scripts/ci-release-build-wanwandequ.ts --targets win32-x64
