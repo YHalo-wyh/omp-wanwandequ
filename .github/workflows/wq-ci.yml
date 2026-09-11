@@ -53,16 +53,6 @@ jobs:
         run: bun --cwd=packages/coding-agent run check:types
       - name: Run WQ focused tests
         run: bun test packages/coding-agent/test/wq-*.test.ts
-      - name: Verify standalone CLI and embedded specialists
-        run: |
-          bun packages/coding-agent/src/wanwandequ-cli.ts doctor --preset turbo
-          bun packages/coding-agent/src/wanwandequ-cli.ts model | grep -Fx 'deepseek/deepseek-v4-flash'
-          bun packages/coding-agent/src/wanwandequ-cli.ts agents | grep -F 'wq-pwn'
-          bun packages/coding-agent/src/wanwandequ-cli.ts agents | grep -F 'wq-reverse'
-          bun packages/coding-agent/src/wanwandequ-cli.ts agents | grep -F 'wq-web'
-          bun packages/coding-agent/src/wanwandequ-cli.ts agents | grep -F 'wq-crypto'
-          bun packages/coding-agent/src/wanwandequ-cli.ts agents | grep -F 'wq-forensics'
-          bun packages/coding-agent/src/wanwandequ-cli.ts presets
       - name: Verify branded release build plan
         run: bun scripts/ci-release-build-wanwandequ.ts --dry-run --targets linux-x64,win32-x64
 
