@@ -1,4 +1,5 @@
 import type { SettingPath } from "../config/settings";
+import { wanwandequModelRoles, wanwandequModelSelector, wanwandequProvider } from "./model";
 
 export type WqPresetName = "safe" | "turbo" | "max";
 
@@ -55,17 +56,24 @@ export function resolveWqPreset(value: string | undefined): WqPreset {
 /**
  * Runtime-only OMP overrides for a WQ challenge session.
  *
- * These are passed through Settings.init({ overrides }) and are never persisted
- * to the user's normal config. Provider/model/auth/MCP discovery therefore stays
- * exactly the same as normal OMP while the competition process gets an aggressive
- * but bounded search policy.
+ * Wanwandequ is intentionally a single-model competition agent. Every model
+ * role points at DeepSeek V4 Flash and enabledModels exposes only that exact
+ * selector. WANWANDEQU_PROVIDER may redirect the same model id through an
+ * organizer-supplied provider/gateway, but no model-family fallback is allowed.
  */
 export function wqRuntimeOverrides(
 	preset: WqPreset,
 	options: { advisor?: boolean; innerConcurrency?: number } = {},
 ): Partial<Record<SettingPath, unknown>> {
 	const inner = Math.max(1, Math.floor(options.innerConcurrency ?? preset.innerConcurrency));
+	const provider = wanwandequProvider();
+	const selector = wanwandequModelSelector();
+	const providerConcurrency = Math.max(8, preset.activeChallenges * inner + 4);
 	return {
+		enabledModels: [selector],
+		modelProviderOrder: [provider],
+		modelRoles: wanwandequModelRoles(),
+		"providers.maxInFlightRequests": { [provider]: providerConcurrency },
 		"task.batch": true,
 		"task.maxConcurrency": inner,
 		"task.maxRecursionDepth": 2,
@@ -89,8 +97,6 @@ export function wqRuntimeOverrides(
 		"retry.maxRetries": 4,
 		"retry.baseDelayMs": 400,
 		"retry.maxDelayMs": 12_000,
-		// The competition requires one organizer-selected model. Never silently
-		// escape to a different configured model after a transient provider error.
 		"retry.modelFallback": false,
 	};
 }
