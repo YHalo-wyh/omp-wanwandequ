@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Wanwandequ Studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "cn.yhalo.wanwandequ.studio",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -28,7 +28,7 @@
     "targets": ["nsis"],
     "externalBin": ["binaries/omp-wanwandequ"],
     "shortDescription": "Autonomous CTF workspace powered by OMP-Wanwandequ",
-    "longDescription": "Lightweight desktop IDE shell for OMP-Wanwandequ with terminal, competition controls, credential management and audit-friendly workspaces.",
+    "longDescription": "Lightweight desktop IDE shell for OMP-Wanwandequ with terminal, persistent competition dashboard, credential management and audit-friendly workspaces.",
     "windows": {
       "nsis": {
         "installMode": "currentUser"
