@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -42,6 +43,43 @@ function loadStandaloneEnv(configRoot: string): void {
 
 loadStandaloneEnv(process.env.PI_CONFIG_DIR);
 
+const originalArgs = process.argv.slice(2);
+
+/**
+ * A console executable started by Explorer gets a transient console window.
+ * If startup fails (missing credential/model config, etc.) that window vanishes
+ * before the operator can read the error. Detect Explorer as the parent and
+ * relaunch the exact same binary in a persistent PowerShell window. Normal
+ * PowerShell/CMD/Windows Terminal invocations stay in the current terminal.
+ */
+function launchedFromWindowsExplorer(): boolean {
+	if (process.platform !== "win32" || originalArgs.length !== 0 || process.env.WANWANDEQU_TERMINAL_RELAUNCH === "1") {
+		return false;
+	}
+	try {
+		const result = spawnSync(
+			"powershell.exe",
+			["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${process.ppid} -ErrorAction Stop).ProcessName`],
+			{ encoding: "utf8", windowsHide: true },
+		);
+		return result.status === 0 && result.stdout.trim().toLowerCase() === "explorer";
+	} catch {
+		return false;
+	}
+}
+
+if (launchedFromWindowsExplorer()) {
+	const escapedExe = process.execPath.replace(/'/g, "''");
+	const child = spawn("powershell.exe", ["-NoExit", "-NoProfile", "-Command", `& '${escapedExe}'`], {
+		cwd: process.cwd(),
+		detached: true,
+		stdio: "ignore",
+		env: { ...process.env, WANWANDEQU_TERMINAL_RELAUNCH: "1" },
+	});
+	child.unref();
+	process.exit(0);
+}
+
 // Every invocation leaves an auditable transcript in the launch working
 // directory. This is intentionally outside the private config root so a
 // competition organizer can inspect/copy the run evidence directly.
@@ -67,7 +105,7 @@ function normalizeWanwanArgv(argv: string[]): string[] {
 	return ["wq", ...argv];
 }
 
-const normalized = normalizeWanwanArgv(process.argv.slice(2));
+const normalized = normalizeWanwanArgv(originalArgs);
 process.argv.splice(2, process.argv.length - 2, ...normalized);
 
 // In a compiled build, cli.ts recognizes PI_COMPILED and launches itself after
@@ -77,7 +115,16 @@ void import("./cli")
 	.then(async ({ runCli }) => {
 		if (process.env.PI_COMPILED !== "true") await runCli(normalized);
 	})
-	.catch(error => {
+	.catch(async error => {
 		process.stderr.write(`omp-wanwandequ fatal: ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
 		process.exitCode = 1;
+		// Last-resort safety for a directly opened console if Explorer detection is
+		// unavailable on a particular Windows build. Never pause scripted/CI runs.
+		if (process.platform === "win32" && originalArgs.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
+			process.stderr.write("\nPress Enter to close...\n");
+			await new Promise<void>(resolve => {
+				process.stdin.resume();
+				process.stdin.once("data", () => resolve());
+			});
+		}
 	});
