@@ -12,6 +12,10 @@ import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
+import wqCriticMd from "../prompts/agents/wq-critic.md" with { type: "text" };
+import wqSolverMd from "../prompts/agents/wq-solver.md" with { type: "text" };
+import wqVerifierMd from "../prompts/agents/wq-verifier.md" with { type: "text" };
+import wqWorkerMd from "../prompts/agents/wq-worker.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking";
 
 import type { AgentDefinition, AgentSource } from "./types";
@@ -44,6 +48,12 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "scout.md", template: scoutMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
+	// WQ competition agents carry their own complete frontmatter so the forked
+	// binary is immediately competition-capable without project-local dotfiles.
+	{ fileName: "wq-worker.md", template: wqWorkerMd },
+	{ fileName: "wq-critic.md", template: wqCriticMd },
+	{ fileName: "wq-verifier.md", template: wqVerifierMd },
+	{ fileName: "wq-solver.md", template: wqSolverMd },
 	{
 		fileName: "task.md",
 		frontmatter: {
