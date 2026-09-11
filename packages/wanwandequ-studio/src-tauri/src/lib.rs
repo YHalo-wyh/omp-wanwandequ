@@ -1,3 +1,6 @@
+mod dashboard;
+
+use dashboard::DashboardSnapshot;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::{
@@ -146,6 +149,15 @@ fn studio_status(app: AppHandle, state: State<StudioState>, workspace: Option<St
 }
 
 #[tauri::command]
+fn dashboard_snapshot(cwd: String) -> Result<DashboardSnapshot, String> {
+    let root = PathBuf::from(cwd);
+    if !root.is_dir() {
+        return Err("Workspace directory does not exist".into());
+    }
+    Ok(dashboard::read_dashboard(&root))
+}
+
+#[tauri::command]
 fn choose_workspace() -> Option<String> {
     rfd::FileDialog::new()
         .set_title("Choose CTF workspace")
@@ -267,6 +279,7 @@ pub fn run() {
         .manage(StudioState::default())
         .invoke_handler(tauri::generate_handler![
             studio_status,
+            dashboard_snapshot,
             choose_workspace,
             list_workspace,
             save_secret,
