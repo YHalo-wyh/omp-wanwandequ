@@ -1,19 +1,19 @@
 mod dashboard;
 
 use dashboard::DashboardSnapshot;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     thread,
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -27,12 +27,13 @@ const PREVIEW_LIMIT: u64 = 1024 * 1024;
 struct StudioState {
     process: Mutex<Option<AgentHandle>>,
     running: Arc<AtomicBool>,
+    mode: Arc<Mutex<String>>,
 }
 
 struct AgentHandle {
-    child: Box<dyn Child + Send + Sync>,
-    writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
+    child: Arc<Mutex<Child>>,
+    stdin: Option<ChildStdin>,
+    mode: String,
 }
 
 #[derive(Serialize)]
@@ -40,6 +41,7 @@ struct StudioStatus {
     api_key: bool,
     team_token: bool,
     running: bool,
+    runtime_mode: String,
     workspace: String,
     agent_path: Option<String>,
     provider: String,
@@ -48,6 +50,12 @@ struct StudioStatus {
     query_url: String,
     reset_url: String,
     submit_url: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ProcessExit {
+    mode: String,
+    code: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -159,7 +167,11 @@ fn audit(cwd: &Path, message: &str) {
     if fs::create_dir_all(&log_dir).is_err() {
         return;
     }
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_dir.join("wanwandequ-studio.log")) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("wanwandequ-studio.log"))
+    {
         let _ = writeln!(file, "{}", message);
     }
 }
@@ -173,12 +185,13 @@ fn checked_workspace_path(root: &str, target: &str) -> Result<(PathBuf, PathBuf)
     Ok((root, target))
 }
 
-fn apply_wq_environment(command: &mut CommandBuilder) {
+fn apply_wq_environment(command: &mut Command) {
     for key in [
         "DEEPSEEK_API_KEY",
         "WQ_TEAM_TOKEN",
         "WANWANDEQU_PROVIDER",
         "WANWANDEQU_PRESET",
+        "WANWANDEQU_THINKING",
         "WQ_QUERY_URL",
         "WQ_RESET_URL",
         "WQ_SUBMIT_URL",
@@ -189,12 +202,128 @@ fn apply_wq_environment(command: &mut CommandBuilder) {
     }
 }
 
+fn validate_workspace(cwd: &str) -> Result<PathBuf, String> {
+    let cwd_path = PathBuf::from(cwd);
+    if !cwd_path.is_dir() {
+        return Err("工作区目录不存在".into());
+    }
+    Ok(cwd_path)
+}
+
+fn spawn_managed_process(
+    app: &AppHandle,
+    state: &State<StudioState>,
+    cwd: &str,
+    args: &[String],
+    mode_name: &str,
+    structured_stdout: bool,
+) -> Result<(), String> {
+    if state.running.load(Ordering::SeqCst) {
+        return Err("OMP Agent 已在运行".into());
+    }
+    let cwd_path = validate_workspace(cwd)?;
+    let executable = find_agent(app)
+        .ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
+
+    let mut command = Command::new(executable);
+    command
+        .current_dir(&cwd_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .args(args);
+    apply_wq_environment(&mut command);
+
+    let mut child = command.spawn().map_err(|e| format!("启动 OMP Agent 失败：{e}"))?;
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take().ok_or_else(|| "无法读取 OMP stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "无法读取 OMP stderr".to_string())?;
+    let child = Arc::new(Mutex::new(child));
+
+    state.running.store(true, Ordering::SeqCst);
+    if let Ok(mut current_mode) = state.mode.lock() {
+        *current_mode = mode_name.to_string();
+    }
+
+    let stdout_app = app.clone();
+    let stdout_mode = mode_name.to_string();
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            if structured_stdout {
+                if !line.trim().is_empty() {
+                    let _ = stdout_app.emit("runtime-frame", line);
+                }
+            } else {
+                let _ = stdout_app.emit("process-output", format!("{line}\n"));
+            }
+        }
+        let _ = stdout_app.emit("process-stream-closed", stdout_mode);
+    });
+
+    let stderr_app = app.clone();
+    thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            let _ = stderr_app.emit("process-stderr", format!("{line}\n"));
+        }
+    });
+
+    let monitor_child = child.clone();
+    let monitor_app = app.clone();
+    let monitor_running = state.running.clone();
+    let monitor_mode_state = state.mode.clone();
+    let monitor_mode = mode_name.to_string();
+    thread::spawn(move || loop {
+        let status = {
+            let mut guard = match monitor_child.lock() {
+                Ok(guard) => guard,
+                Err(_) => break,
+            };
+            guard.try_wait()
+        };
+        match status {
+            Ok(Some(exit)) => {
+                monitor_running.store(false, Ordering::SeqCst);
+                if let Ok(mut current_mode) = monitor_mode_state.lock() {
+                    current_mode.clear();
+                }
+                let _ = monitor_app.emit(
+                    "agent-exited",
+                    ProcessExit {
+                        mode: monitor_mode,
+                        code: exit.code(),
+                    },
+                );
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(120)),
+            Err(_) => {
+                monitor_running.store(false, Ordering::SeqCst);
+                break;
+            }
+        }
+    });
+
+    let mut process = state.process.lock().map_err(|_| "进程锁异常")?;
+    *process = Some(AgentHandle {
+        child,
+        stdin,
+        mode: mode_name.to_string(),
+    });
+    audit(&cwd_path, &format!("[studio] start mode={mode_name} args={args:?}"));
+    Ok(())
+}
+
 #[tauri::command]
 fn studio_status(app: AppHandle, state: State<StudioState>, workspace: Option<String>) -> StudioStatus {
     StudioStatus {
         api_key: read_env_value("DEEPSEEK_API_KEY").is_some(),
         team_token: read_env_value("WQ_TEAM_TOKEN").is_some(),
         running: state.running.load(Ordering::SeqCst),
+        runtime_mode: state.mode.lock().map(|mode| mode.clone()).unwrap_or_default(),
         workspace: workspace.unwrap_or_default(),
         agent_path: find_agent(&app).map(|path| path.to_string_lossy().into_owned()),
         provider: configured_or("WANWANDEQU_PROVIDER", "deepseek"),
@@ -217,7 +346,10 @@ fn dashboard_snapshot(cwd: String) -> Result<DashboardSnapshot, String> {
 
 #[tauri::command]
 fn choose_workspace() -> Option<String> {
-    rfd::FileDialog::new().set_title("选择 CTF 工作区").pick_folder().map(|path| path.to_string_lossy().into_owned())
+    rfd::FileDialog::new()
+        .set_title("选择 CTF 工作区")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -234,7 +366,11 @@ fn list_workspace(cwd: String) -> Result<Vec<FileEntry>, String> {
             size: if meta.is_file() { meta.len() } else { 0 },
         });
     }
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(entries)
 }
 
@@ -247,7 +383,7 @@ fn read_workspace_file(root: String, path: String) -> Result<FilePreview, String
     }
     let mut file = File::open(&target).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    std::io::Read::by_ref(&mut file)
+    Read::by_ref(&mut file)
         .take(PREVIEW_LIMIT)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
@@ -255,7 +391,10 @@ fn read_workspace_file(root: String, path: String) -> Result<FilePreview, String
     let text = String::from_utf8(bytes).ok();
     let binary = text.is_none();
     Ok(FilePreview {
-        name: target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+        name: target
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         path: target.to_string_lossy().into_owned(),
         size: meta.len(),
         text,
@@ -304,7 +443,11 @@ fn save_setting(kind: String, value: String) -> Result<(), String> {
     let value = value.trim();
     let key = match kind.as_str() {
         "provider" => {
-            if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')) {
+            if value.is_empty()
+                || !value
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+            {
                 return Err("Provider 名称包含非法字符".into());
             }
             "WANWANDEQU_PROVIDER"
@@ -331,79 +474,85 @@ fn save_setting(kind: String, value: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start_agent(app: AppHandle, state: State<StudioState>, cwd: String, args: Vec<String>) -> Result<(), String> {
-    if state.running.load(Ordering::SeqCst) {
-        return Err("OMP Agent 已在运行".into());
-    }
-    let cwd_path = PathBuf::from(&cwd);
-    if !cwd_path.is_dir() {
-        return Err("工作区目录不存在".into());
-    }
-    let executable = find_agent(&app).ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
-    let pair = native_pty_system()
-        .openpty(PtySize { rows: 35, cols: 130, pixel_width: 0, pixel_height: 0 })
-        .map_err(|e| e.to_string())?;
-    let mut command = CommandBuilder::new(executable.to_string_lossy().to_string());
-    command.cwd(cwd_path.clone());
-    command.env("TERM", "xterm-256color");
-    apply_wq_environment(&mut command);
-    for arg in &args {
-        command.arg(arg);
-    }
-    let child = pair.slave.spawn_command(command).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    state.running.store(true, Ordering::SeqCst);
-    let running = state.running.clone();
-    let emit_app = app.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = emit_app.emit("terminal-output", text);
-                }
-            }
-        }
-        running.store(false, Ordering::SeqCst);
-        let _ = emit_app.emit("agent-exited", ());
-    });
-    *state.process.lock().map_err(|_| "进程锁异常")? = Some(AgentHandle { child, writer, master: pair.master });
-    audit(&cwd_path, &format!("[studio] start args={:?}", args));
-    Ok(())
+fn start_runtime(app: AppHandle, state: State<StudioState>, cwd: String) -> Result<(), String> {
+    spawn_managed_process(&app, &state, &cwd, &["runtime".to_string()], "runtime", true)
 }
 
 #[tauri::command]
-fn write_agent(state: State<StudioState>, data: String) -> Result<(), String> {
-    let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
-    let handle = guard.as_mut().ok_or_else(|| "OMP Agent 当前没有运行".to_string())?;
-    handle.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    handle.writer.flush().map_err(|e| e.to_string())
+fn start_headless(
+    app: AppHandle,
+    state: State<StudioState>,
+    cwd: String,
+    args: Vec<String>,
+    label: String,
+) -> Result<(), String> {
+    let action = args.first().map(String::as_str).unwrap_or_default();
+    if !matches!(action, "doctor" | "solve" | "run") {
+        return Err("Studio 只允许启动 doctor / solve / run 三类无界面任务".into());
+    }
+    spawn_managed_process(&app, &state, &cwd, &args, &label, false)
 }
 
 #[tauri::command]
-fn resize_agent(state: State<StudioState>, cols: u16, rows: u16) -> Result<(), String> {
-    let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
-    if let Some(handle) = guard.as_mut() {
-        handle
-            .master
-            .resize(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 })
-            .map_err(|e| e.to_string())?;
+fn runtime_command(state: State<StudioState>, frame: String) -> Result<(), String> {
+    let parsed: serde_json::Value = serde_json::from_str(&frame).map_err(|e| format!("RPC 命令不是合法 JSON：{e}"))?;
+    if !parsed.is_object() {
+        return Err("RPC 命令必须是 JSON 对象".into());
     }
-    Ok(())
+    let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
+    let handle = guard.as_mut().ok_or_else(|| "Wanwandequ Runtime 当前没有运行".to_string())?;
+    if handle.mode != "runtime" {
+        return Err("当前运行的不是结构化 Runtime".into());
+    }
+    let stdin = handle.stdin.as_mut().ok_or_else(|| "Runtime stdin 已关闭".to_string())?;
+    stdin.write_all(frame.as_bytes()).map_err(|e| e.to_string())?;
+    stdin.write_all(b"\n").map_err(|e| e.to_string())?;
+    stdin.flush().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn stop_agent(state: State<StudioState>) -> Result<(), String> {
     let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
-    if let Some(mut handle) = guard.take() {
-        handle.child.kill().map_err(|e| e.to_string())?;
+    if let Some(handle) = guard.take() {
+        let mut child = handle.child.lock().map_err(|_| "子进程锁异常")?;
+        child.kill().map_err(|e| e.to_string())?;
     }
     state.running.store(false, Ordering::SeqCst);
+    if let Ok(mut mode) = state.mode.lock() {
+        mode.clear();
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn open_debug_tui(app: AppHandle, cwd: String) -> Result<(), String> {
+    let cwd_path = validate_workspace(&cwd)?;
+    let executable = find_agent(&app)
+        .ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("cmd");
+        command
+            .current_dir(&cwd_path)
+            .arg("/C")
+            .arg("start")
+            .arg("Wanwandequ Debug TUI")
+            .arg("cmd")
+            .arg("/K")
+            .arg(executable)
+            .arg("chat");
+        apply_wq_environment(&mut command);
+        command.spawn().map_err(|e| e.to_string())?;
+        audit(&cwd_path, "[studio] opened native debug TUI");
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = executable;
+        Err("当前版本只在 Windows 上自动打开独立调试终端；其他平台请手动运行 omp-wanwandequ chat".into())
+    }
 }
 
 pub fn run() {
@@ -418,10 +567,11 @@ pub fn run() {
             open_workspace_path,
             save_secret,
             save_setting,
-            start_agent,
-            write_agent,
-            resize_agent,
-            stop_agent
+            start_runtime,
+            start_headless,
+            runtime_command,
+            stop_agent,
+            open_debug_tui
         ])
         .run(tauri::generate_context!())
         .expect("启动万万得取 Studio 失败");
