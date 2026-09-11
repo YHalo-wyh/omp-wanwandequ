@@ -4,7 +4,6 @@ import { runWqCommand } from "../wq/cli";
 
 export default class Wq extends Command {
 	static description = commandHelp.description;
-	static hidden = commandHelp.hidden;
 	static strict = false;
 
 	async run(): Promise<void> {
