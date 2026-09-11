@@ -32,6 +32,8 @@ export interface WqChatOptions {
 	thinking?: string;
 }
 
+export type WqRuntimeOptions = WqChatOptions;
+
 function mergeAppendPrompt(existing: string | undefined): string {
 	return existing?.trim() ? `${existing.trim()}\n\n${WQ_SYSTEM_PROMPT}` : WQ_SYSTEM_PROMPT;
 }
@@ -47,10 +49,7 @@ function wqSessionFactory() {
 	};
 }
 
-/** Open the native OMP interactive TUI with Wanwandequ policy and skills loaded. */
-export async function runWqChat(options: WqChatOptions = {}): Promise<void> {
-	const cwd = path.resolve(options.cwd ?? process.cwd());
-	await materializeWqSkills(cwd);
+async function createWqSettings(options: WqChatOptions, cwd: string) {
 	const preset = resolveWqPreset(options.preset);
 	const settings = await Settings.init({
 		cwd,
@@ -59,7 +58,43 @@ export async function runWqChat(options: WqChatOptions = {}): Promise<void> {
 			innerConcurrency: options.innerConcurrency,
 		}),
 	});
+	return { preset, settings };
+}
+
+/** Open the native OMP interactive TUI with Wanwandequ policy and skills loaded. */
+export async function runWqChat(options: WqChatOptions = {}): Promise<void> {
+	const cwd = path.resolve(options.cwd ?? process.cwd());
+	await materializeWqSkills(cwd);
+	const { settings } = await createWqSettings(options, cwd);
 	const rawArgs: string[] = ["--cwd", cwd, "--auto-approve", "--model", wanwandequModelSelector()];
+	if (options.thinking) rawArgs.push("--thinking", options.thinking);
+	const parsed = parseArgs(rawArgs);
+	await runRootCommand(parsed, rawArgs, { settings, createAgentSession: wqSessionFactory() });
+}
+
+/**
+ * Run Wanwandequ as a structured headless runtime.
+ *
+ * stdin/stdout are OMP's native JSONL RPC protocol. No terminal emulation,
+ * ANSI scraping, or synthetic tool proxy sits between the host and AgentSession.
+ * The exact same WQ system prompt, skills, extensions, tools, MCP discovery,
+ * subagents, compaction and model policy used by the native OMP runtime remain
+ * active; only the presentation layer changes from TUI to RPC.
+ */
+export async function runWqRuntime(options: WqRuntimeOptions = {}): Promise<void> {
+	const cwd = path.resolve(options.cwd ?? process.cwd());
+	await materializeWqSkills(cwd);
+	const { settings } = await createWqSettings(options, cwd);
+	const rawArgs: string[] = [
+		"--cwd",
+		cwd,
+		"--mode",
+		"rpc",
+		"--auto-approve",
+		"--no-title",
+		"--model",
+		wanwandequModelSelector(),
+	];
 	if (options.thinking) rawArgs.push("--thinking", options.thinking);
 	const parsed = parseArgs(rawArgs);
 	await runRootCommand(parsed, rawArgs, { settings, createAgentSession: wqSessionFactory() });
