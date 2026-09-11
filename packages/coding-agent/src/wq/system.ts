@@ -1,4 +1,4 @@
-import { skillForCategory } from "./skills";
+import { skillPackForCategory } from "./skills";
 
 export const WQ_RESULT_OPEN = "<WQ_RESULT>";
 export const WQ_RESULT_CLOSE = "</WQ_RESULT>";
@@ -18,7 +18,7 @@ STATE MODEL
 
 SEARCH LOOP
 1. Read WQ_CHALLENGE.json and WQ_STATE.md when present. Treat platform category/connection as routing hints and never redo reconnaissance already captured as FACT.
-2. When a Wanwandequ category skill is named in the task prompt, read that skill before deep analysis and follow its fast-path decision rules. Skills are playbooks, not excuses to run every listed tool.
+2. Read the named Wanwandequ skill pack before deep analysis. The first skill is the category fast path; additional micro-skills are conditional decision aids. Do not blindly execute every technique they mention.
 3. Perform only the cheapest local inspection needed to identify the bottleneck.
 4. For pwn/reverse/web/crypto/forensics, allocate one task-batch lane to the matching bundled specialist (wq-pwn, wq-reverse, wq-web, wq-crypto, wq-forensics). Use remaining lanes for mutually distinct concrete INTENTS through wq-worker. Duplicate generic recon lanes are forbidden.
 5. Merge evidence. Promote only evidenced claims to FACT and persist compact state to WQ_STATE.md.
@@ -100,10 +100,10 @@ export function buildWqSolvePrompt(input: {
 		"Solve this authorized CTF challenge autonomously under the WQ system contract.",
 		`Challenge workspace/input: ${input.challengePath}`,
 	];
-	if (input.categoryHint) {
-		lines.push(`Category hint: ${input.categoryHint}`);
-		const skill = skillForCategory(input.categoryHint);
-		if (skill) lines.push(`Category playbook: read skill://${skill} before deep category-specific analysis.`);
+	if (input.categoryHint) lines.push(`Category hint: ${input.categoryHint}`);
+	const skills = skillPackForCategory(input.categoryHint);
+	if (skills.length) {
+		lines.push(`Skill pack: ${skills.map(skill => `skill://${skill}`).join(", ")}. Read the primary skill first; use focused micro-skills only when their prerequisites match observed evidence.`);
 	}
 	if (input.visit && input.visit > 1) {
 		lines.push(`This is fresh-context visit ${input.visit}. Read WQ_STATE.md first and resume; do not repeat established reconnaissance.`);
