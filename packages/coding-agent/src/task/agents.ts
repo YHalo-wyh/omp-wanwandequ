@@ -13,8 +13,13 @@ import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 import wqCriticMd from "../prompts/agents/wq-critic.md" with { type: "text" };
+import wqCryptoMd from "../prompts/agents/wq-crypto.md" with { type: "text" };
+import wqForensicsMd from "../prompts/agents/wq-forensics.md" with { type: "text" };
+import wqPwnMd from "../prompts/agents/wq-pwn.md" with { type: "text" };
+import wqReverseMd from "../prompts/agents/wq-reverse.md" with { type: "text" };
 import wqSolverMd from "../prompts/agents/wq-solver.md" with { type: "text" };
 import wqVerifierMd from "../prompts/agents/wq-verifier.md" with { type: "text" };
+import wqWebMd from "../prompts/agents/wq-web.md" with { type: "text" };
 import wqWorkerMd from "../prompts/agents/wq-worker.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking";
 
@@ -53,6 +58,11 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "wq-worker.md", template: wqWorkerMd },
 	{ fileName: "wq-critic.md", template: wqCriticMd },
 	{ fileName: "wq-verifier.md", template: wqVerifierMd },
+	{ fileName: "wq-pwn.md", template: wqPwnMd },
+	{ fileName: "wq-reverse.md", template: wqReverseMd },
+	{ fileName: "wq-web.md", template: wqWebMd },
+	{ fileName: "wq-crypto.md", template: wqCryptoMd },
+	{ fileName: "wq-forensics.md", template: wqForensicsMd },
 	{ fileName: "wq-solver.md", template: wqSolverMd },
 	{
 		fileName: "task.md",
@@ -106,9 +116,7 @@ export class AgentParsingError extends Error {
 	}
 }
 
-/**
- * Parse an agent from embedded content.
- */
+/** Parse an agent from embedded content. */
 export function parseAgent(
 	filePath: string,
 	content: string,
@@ -131,47 +139,28 @@ export function parseAgent(
 	};
 }
 
-/** Cache for bundled agents */
 let bundledAgentsCache: AgentDefinition[] | null = null;
 
-/**
- * Load all bundled agents from embedded content.
- * Results are cached after first load.
- */
 export function loadBundledAgents(): AgentDefinition[] {
-	if (bundledAgentsCache !== null) {
-		return bundledAgentsCache;
-	}
+	if (bundledAgentsCache !== null) return bundledAgentsCache;
 	bundledAgentsCache = EMBEDDED_AGENT_DEFS.map(def =>
 		parseAgent(`embedded:${def.fileName}`, buildAgentContent(def), "bundled"),
 	);
 	return bundledAgentsCache;
 }
 
-/**
- * Get a bundled agent by name.
- */
 export function getBundledAgent(name: string): AgentDefinition | undefined {
 	return loadBundledAgents().find(a => a.name === name);
 }
 
-/**
- * Get all bundled agents as a map keyed by name.
- */
 export function getBundledAgentsMap(): Map<string, AgentDefinition> {
 	const map = new Map<string, AgentDefinition>();
-	for (const agent of loadBundledAgents()) {
-		map.set(agent.name, agent);
-	}
+	for (const agent of loadBundledAgents()) map.set(agent.name, agent);
 	return map;
 }
 
-/**
- * Clear the bundled agents cache (for testing).
- */
 export function clearBundledAgentsCache(): void {
 	bundledAgentsCache = null;
 }
 
-// Re-export for backward compatibility
 export const BUNDLED_AGENTS = loadBundledAgents;
