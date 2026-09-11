@@ -20,11 +20,16 @@ export interface SpawnCaptureResult {
 	elapsedMs: number;
 }
 
-export async function spawnSelfCapture(args: string[], options: { cwd: string; timeoutMs: number }): Promise<SpawnCaptureResult> {
+export async function spawnSelfCapture(
+	args: string[],
+	options: { cwd: string; timeoutMs: number; stripEnv?: string[] },
+): Promise<SpawnCaptureResult> {
 	const started = Date.now();
+	const env: Record<string, string | undefined> = { ...process.env };
+	for (const key of options.stripEnv ?? []) delete env[key];
 	const proc = Bun.spawn([...currentOmpCommand(), ...args], {
 		cwd: options.cwd,
-		env: process.env,
+		env,
 		stdout: "pipe",
 		stderr: "pipe",
 	});
