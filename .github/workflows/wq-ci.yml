@@ -18,6 +18,7 @@ on:
       - "scripts/ci-release-build-wanwandequ.ts"
       - "scripts/install-wanwandequ.*"
       - "scripts/install-and-run-wanwandequ.ps1"
+      - "installer/**"
       - "WANWANDEQU.md"
       - ".github/workflows/wq-ci.yml"
   pull_request:
@@ -35,6 +36,7 @@ on:
       - "scripts/ci-release-build-wanwandequ.ts"
       - "scripts/install-wanwandequ.*"
       - "scripts/install-and-run-wanwandequ.ps1"
+      - "installer/**"
       - "WANWANDEQU.md"
       - ".github/workflows/wq-ci.yml"
   workflow_dispatch:
@@ -132,10 +134,77 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  windows_installer:
+    name: Build click-to-install Windows setup
+    needs: windows_binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: omp-wanwandequ-windows-x64
+          path: dist-bin
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+      - name: Build Windows installer
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force installer\dist | Out-Null
+          $bin = (Resolve-Path 'dist-bin\omp-wanwandequ-windows-x64.exe').Path
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          & $iscc "/DWinBinary=$bin" 'installer\windows.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash installer\dist\OMP-Wanwandequ-Setup-Windows-x64.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  OMP-Wanwandequ-Setup-Windows-x64.exe" } |
+            Set-Content installer\dist\OMP-Wanwandequ-Setup-Windows-x64.exe.sha256 -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omp-wanwandequ-windows-installer
+          path: |
+            installer/dist/OMP-Wanwandequ-Setup-Windows-x64.exe
+            installer/dist/OMP-Wanwandequ-Setup-Windows-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  wsl_installer:
+    name: Build click-to-install WSL setup
+    needs: linux_binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: omp-wanwandequ-linux-x64
+          path: dist-bin
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+      - name: Build WSL installer
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force installer\dist | Out-Null
+          $bin = (Resolve-Path 'dist-bin\omp-wanwandequ-linux-x64').Path
+          $bridge = (Resolve-Path 'installer\install-wsl.ps1').Path
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          & $iscc "/DLinuxBinary=$bin" "/DWslBridge=$bridge" 'installer\wsl.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash installer\dist\OMP-Wanwandequ-Setup-WSL-x64.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  OMP-Wanwandequ-Setup-WSL-x64.exe" } |
+            Set-Content installer\dist\OMP-Wanwandequ-Setup-WSL-x64.exe.sha256 -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omp-wanwandequ-wsl-installer
+          path: |
+            installer/dist/OMP-Wanwandequ-Setup-WSL-x64.exe
+            installer/dist/OMP-Wanwandequ-Setup-WSL-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Publish rolling wq-dev release
     if: github.event_name == 'push' && github.ref == 'refs/heads/wq/competition-v1'
-    needs: [windows_binary, linux_binary]
+    needs: [windows_binary, linux_binary, windows_installer, wsl_installer]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
@@ -145,6 +214,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: omp-wanwandequ-linux-x64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: omp-wanwandequ-windows-installer
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: omp-wanwandequ-wsl-installer
           path: dist
       - name: Publish rolling release
         env:
@@ -158,5 +235,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "OMP-Wanwandequ rolling dev" \
-            --notes "Rolling Windows/Linux x64 competition build from $GITHUB_SHA. Model locked to DeepSeek V4 Flash. Bare launch enters test chat until WQ_TEAM_TOKEN is configured; once configured, bare launch is unattended competition mode." \
+            --notes "Rolling Windows/Linux x64 competition build from $GITHUB_SHA. Includes one-click Windows and WSL installers. Model locked to DeepSeek V4 Flash. Bare launch enters test chat until WQ_TEAM_TOKEN is configured; once configured, bare launch is unattended competition mode." \
             --prerelease
