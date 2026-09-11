@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "wanwandequ-studio"
 version = "0.1.0"
@@ -17,4 +19,3 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 portable-pty = "0.9"
 rfd = "0.15"
-
