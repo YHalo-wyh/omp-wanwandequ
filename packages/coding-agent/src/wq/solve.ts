@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseArgs } from "../cli/args";
 import { Settings } from "../config/settings";
@@ -34,10 +35,12 @@ function mergeAppendPrompt(existing: string | undefined): string {
  */
 export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 	const target = path.resolve(options.target);
+	const stat = await fs.stat(target);
+	const cwd = stat.isDirectory() ? target : path.dirname(target);
 	const preset = resolveWqPreset(options.preset);
 	const timeoutSeconds = Math.max(30, Math.floor(options.timeoutSeconds ?? preset.visitSeconds));
 	const settings = await Settings.init({
-		cwd: target,
+		cwd,
 		overrides: wqRuntimeOverrides(preset, {
 			advisor: options.advisor,
 			innerConcurrency: options.innerConcurrency,
@@ -51,7 +54,7 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 		visit: options.visit,
 	});
 
-	const rawArgs: string[] = ["--cwd", target, "--max-time", String(timeoutSeconds), "--auto-approve", "--no-title"];
+	const rawArgs: string[] = ["--cwd", cwd, "--max-time", String(timeoutSeconds), "--auto-approve", "--no-title"];
 	if (options.print !== false) rawArgs.push("--print");
 	if (options.noSession !== false) rawArgs.push("--no-session");
 	if (options.provider) rawArgs.push("--provider", options.provider);
