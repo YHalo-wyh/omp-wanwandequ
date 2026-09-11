@@ -1,3 +1,5 @@
+import { skillForCategory } from "./skills";
+
 export const WQ_RESULT_OPEN = "<WQ_RESULT>";
 export const WQ_RESULT_CLOSE = "</WQ_RESULT>";
 
@@ -16,12 +18,13 @@ STATE MODEL
 
 SEARCH LOOP
 1. Read WQ_CHALLENGE.json and WQ_STATE.md when present. Treat platform category/connection as routing hints and never redo reconnaissance already captured as FACT.
-2. Perform only the cheapest local inspection needed to identify the bottleneck.
-3. For pwn/reverse/web/crypto/forensics, allocate one task-batch lane to the matching bundled specialist (wq-pwn, wq-reverse, wq-web, wq-crypto, wq-forensics). Use remaining lanes for mutually distinct concrete INTENTS through wq-worker. Duplicate generic recon lanes are forbidden.
-4. Merge evidence. Promote only evidenced claims to FACT and persist compact state to WQ_STATE.md.
-5. When a lane has valuable context and remains promising, continue that same peer through hub instead of paying for a cold restart.
-6. When progress stagnates or assumptions conflict, call wq-critic in a fresh context and execute a different strategy class, not a spelling variation.
-7. Any candidate flag must go through wq-verifier. Locally solved means verifier=accept plus literal provenance; globally solved means the controller/platform confirms it.
+2. When a Wanwandequ category skill is named in the task prompt, read that skill before deep analysis and follow its fast-path decision rules. Skills are playbooks, not excuses to run every listed tool.
+3. Perform only the cheapest local inspection needed to identify the bottleneck.
+4. For pwn/reverse/web/crypto/forensics, allocate one task-batch lane to the matching bundled specialist (wq-pwn, wq-reverse, wq-web, wq-crypto, wq-forensics). Use remaining lanes for mutually distinct concrete INTENTS through wq-worker. Duplicate generic recon lanes are forbidden.
+5. Merge evidence. Promote only evidenced claims to FACT and persist compact state to WQ_STATE.md.
+6. When a lane has valuable context and remains promising, continue that same peer through hub instead of paying for a cold restart.
+7. When progress stagnates or assumptions conflict, call wq-critic in a fresh context and execute a different strategy class, not a spelling variation.
+8. Any candidate flag must go through wq-verifier. Locally solved means verifier=accept plus literal provenance; globally solved means the controller/platform confirms it.
 
 ANTI-STALL
 - After two materially identical failed commands/payloads with no new fact, pivot.
@@ -97,7 +100,11 @@ export function buildWqSolvePrompt(input: {
 		"Solve this authorized CTF challenge autonomously under the WQ system contract.",
 		`Challenge workspace/input: ${input.challengePath}`,
 	];
-	if (input.categoryHint) lines.push(`Category hint: ${input.categoryHint}`);
+	if (input.categoryHint) {
+		lines.push(`Category hint: ${input.categoryHint}`);
+		const skill = skillForCategory(input.categoryHint);
+		if (skill) lines.push(`Category playbook: read skill://${skill} before deep category-specific analysis.`);
+	}
 	if (input.visit && input.visit > 1) {
 		lines.push(`This is fresh-context visit ${input.visit}. Read WQ_STATE.md first and resume; do not repeat established reconnaissance.`);
 	}
