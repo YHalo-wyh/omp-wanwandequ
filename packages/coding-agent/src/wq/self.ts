@@ -17,12 +17,13 @@ export interface SpawnCaptureResult {
 	stdout: string;
 	stderr: string;
 	timedOut: boolean;
+	aborted: boolean;
 	elapsedMs: number;
 }
 
 export async function spawnSelfCapture(
 	args: string[],
-	options: { cwd: string; timeoutMs: number; stripEnv?: string[] },
+	options: { cwd: string; timeoutMs: number; stripEnv?: string[]; signal?: AbortSignal },
 ): Promise<SpawnCaptureResult> {
 	const started = Date.now();
 	const env: Record<string, string | undefined> = { ...process.env };
@@ -36,24 +37,47 @@ export async function spawnSelfCapture(
 	const stdoutPromise = new Response(proc.stdout).text();
 	const stderrPromise = new Response(proc.stderr).text();
 	let timedOut = false;
+	let aborted = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let detachAbort: (() => void) | undefined;
+
+	const kill = () => {
+		try {
+			proc.kill("SIGKILL");
+		} catch {}
+	};
 	const timeout = new Promise<number>(resolve => {
 		timer = setTimeout(() => {
 			timedOut = true;
-			try {
-				proc.kill("SIGKILL");
-			} catch {}
+			kill();
 			resolve(124);
 		}, Math.max(1_000, options.timeoutMs));
 	});
-	const exitCode = await Promise.race([proc.exited, timeout]);
+	const abort = new Promise<number>(resolve => {
+		const signal = options.signal;
+		if (!signal) return;
+		const onAbort = () => {
+			aborted = true;
+			kill();
+			resolve(130);
+		};
+		if (signal.aborted) {
+			onAbort();
+			return;
+		}
+		signal.addEventListener("abort", onAbort, { once: true });
+		detachAbort = () => signal.removeEventListener("abort", onAbort);
+	});
+	const exitCode = await Promise.race([proc.exited, timeout, abort]);
 	if (timer) clearTimeout(timer);
+	detachAbort?.();
 	const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
 	return {
 		exitCode,
 		stdout,
 		stderr,
 		timedOut,
+		aborted,
 		elapsedMs: Date.now() - started,
 	};
 }
