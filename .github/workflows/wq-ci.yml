@@ -17,6 +17,7 @@ on:
       - "packages/coding-agent/test/wq-*.test.ts"
       - "scripts/ci-release-build-wanwandequ.ts"
       - "scripts/install-wanwandequ.*"
+      - "scripts/install-and-run-wanwandequ.ps1"
       - "WANWANDEQU.md"
       - ".github/workflows/wq-ci.yml"
   pull_request:
@@ -33,12 +34,13 @@ on:
       - "packages/coding-agent/test/wq-*.test.ts"
       - "scripts/ci-release-build-wanwandequ.ts"
       - "scripts/install-wanwandequ.*"
+      - "scripts/install-and-run-wanwandequ.ps1"
       - "WANWANDEQU.md"
       - ".github/workflows/wq-ci.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: wq-${{ github.ref }}
@@ -81,10 +83,32 @@ jobs:
           ls -lh packages/natives/native/pi_natives.win32-x64*.node
       - name: Build omp-wanwandequ Windows x64
         run: bun scripts/ci-release-build-wanwandequ.ts --targets win32-x64
+      - name: Generate checksum
+        shell: bash
+        run: |
+          cd packages/coding-agent/binaries
+          sha256sum omp-wanwandequ-windows-x64.exe > omp-wanwandequ-windows-x64.exe.sha256
       - name: Upload competition binary
         uses: actions/upload-artifact@v4
         with:
           name: omp-wanwandequ-windows-x64
-          path: packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe
+          path: |
+            packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe
+            packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe.sha256
           if-no-files-found: error
           retention-days: 7
+      - name: Publish rolling wq-dev release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/wq/competition-v1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe"
+          checksum="${binary}.sha256"
+          gh release delete wq-dev --cleanup-tag -y >/dev/null 2>&1 || true
+          gh release create wq-dev "$binary" "$checksum" \
+            --target "$GITHUB_SHA" \
+            --title "OMP-Wanwandequ rolling dev" \
+            --notes "Rolling Windows x64 competition build from $GITHUB_SHA. Model locked to DeepSeek V4 Flash. Use the repository installer for one-click setup." \
+            --prerelease
