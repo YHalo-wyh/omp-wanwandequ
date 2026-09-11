@@ -126,8 +126,8 @@ function normalizeWanwanArgv(argv: string[]): string[] {
 	// Internal WQ child processes already carry the hidden/top-level `wq` prefix.
 	if (first === "wq") return argv;
 
-	// The public binary presents WQ actions directly:
-	//   omp-wanwandequ / chat / runtime / run / solve / bench / doctor / agents / presets
+	// The public binary presents terminal-first WQ actions directly:
+	//   omp-wanwandequ / chat / run / solve / bench / doctor / agents / presets
 	return ["wq", ...argv];
 }
 
