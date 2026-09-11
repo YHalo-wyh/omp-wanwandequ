@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionFactory } from "../extensibility/extensions";
+import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 
 const API_KEY = "DEEPSEEK_API_KEY";
 const TEAM_TOKEN = "WQ_TEAM_TOKEN";
@@ -64,15 +64,7 @@ function maskedStatus(value: string | undefined): string {
 	return value?.trim() ? "configured" : "not configured";
 }
 
-async function setSecret(
-	kind: "api" | "token",
-	ctx: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]["handler"] extends (
-		args: string,
-		ctx: infer T,
-	) => unknown
-		? T
-		: never,
-): Promise<void> {
+async function setSecret(kind: "api" | "token", ctx: ExtensionContext): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("This command requires the interactive TUI.", "warning");
 		return;
@@ -98,19 +90,14 @@ async function setSecret(
 	);
 }
 
-async function clearSecret(
-	kind: "api" | "token",
-	ctx: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]["handler"] extends (
-		args: string,
-		ctx: infer T,
-	) => unknown
-		? T
-		: never,
-): Promise<void> {
+async function clearSecret(kind: "api" | "token", ctx: ExtensionContext): Promise<void> {
 	const envKey = kind === "api" ? API_KEY : TEAM_TOKEN;
 	await persistWqEnvValue(envKey, "");
 	delete process.env[envKey];
-	ctx.ui.notify(kind === "api" ? "DeepSeek API key cleared." : "Team token cleared; bare launch returns to test chat mode.", "info");
+	ctx.ui.notify(
+		kind === "api" ? "DeepSeek API key cleared." : "Team token cleared; bare launch returns to test chat mode.",
+		"info",
+	);
 }
 
 export const wqConfigExtension: ExtensionFactory = pi => {
