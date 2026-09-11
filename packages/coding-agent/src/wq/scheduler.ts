@@ -143,6 +143,37 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	const active = new Map<string, Promise<VisitOutcome>>();
 	let lastRemote: WqChallenge[] = [];
 
+	// events.jsonl records history; heartbeat.json records current liveness. Keeping
+	// those concepts separate prevents a killed/crashed run from looking alive just
+	// because its last durable event was run.started.
+	const heartbeatFile = path.join(runtimeRoot, "heartbeat.json");
+	const heartbeatStartedAt = Date.now();
+	let heartbeatWrite: Promise<void> = Promise.resolve();
+	const writeHeartbeat = () => {
+		heartbeatWrite = heartbeatWrite
+			.then(() =>
+				fs.writeFile(
+					heartbeatFile,
+					`${JSON.stringify({
+						pid: process.pid,
+						startedAt: heartbeatStartedAt,
+						updatedAt: Date.now(),
+						deadline,
+						preset: basePreset.name,
+						activeChallenges: active.size,
+					})}\n`,
+					"utf8",
+				),
+			)
+			.catch(error => {
+				process.stderr.write(`[WQ] heartbeat write failed: ${error instanceof Error ? error.message : String(error)}\n`);
+			});
+		return heartbeatWrite;
+	};
+	await writeHeartbeat();
+	const heartbeatTimer = setInterval(() => void writeHeartbeat(), 2000);
+	heartbeatTimer.unref?.();
+
 	await events.emit("run.started", {
 		preset: basePreset.name,
 		activeChallenges: basePreset.activeChallenges,
@@ -320,5 +351,8 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	const solvedCount = Object.values(stateStore.state.challenges).filter(item => item.solved).length;
 	await events.emit("run.finished", { solved: solvedCount, challenges: Object.keys(stateStore.state.challenges).length });
 	await events.flush();
+	clearInterval(heartbeatTimer);
+	await heartbeatWrite;
+	await fs.rm(heartbeatFile, { force: true }).catch(() => {});
 	process.stdout.write(`[WQ] finished solved=${solvedCount} state=${stateStore.file}\n`);
 }
