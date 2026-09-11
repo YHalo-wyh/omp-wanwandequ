@@ -4,6 +4,7 @@ import { parseArgs } from "../cli/args";
 import { Settings } from "../config/settings";
 import { runRootCommand } from "../main";
 import { createAgentSession, type CreateAgentSessionOptions } from "../sdk";
+import { wqConfigExtension } from "./config-extension";
 import { wanwandequModelSelector } from "./model";
 import { resolveWqPreset, wqRuntimeOverrides, type WqPresetName } from "./preset";
 import { materializeWqSkills } from "./skills";
@@ -41,6 +42,7 @@ function wqSessionFactory() {
 		return createAgentSession({
 			...base,
 			appendSystemPrompt: mergeAppendPrompt(base.appendSystemPrompt),
+			extensions: [wqConfigExtension, ...(base.extensions ?? [])],
 		});
 	};
 }
