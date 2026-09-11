@@ -40,7 +40,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Studio installer
         shell: powershell
-        run: bun --cwd packages/wanwandequ-studio run studio:build
+        run: bun --cwd=packages/wanwandequ-studio run studio:build
       - name: Stage installer
         shell: powershell
         run: |
