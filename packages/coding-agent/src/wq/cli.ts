@@ -61,8 +61,8 @@ function printHelp(): void {
 	process.stdout.write(`OMP-Wanwandequ ${VERSION}\n`);
 	process.stdout.write(`Autonomous Bay Area Cup CTF agent; model locked to ${WANWANDEQU_MODEL_ID}.\n\n`);
 	process.stdout.write(`Usage:\n`);
-	process.stdout.write(`  omp-wanwandequ                         # interactive Wanwandequ TUI\n`);
-	process.stdout.write(`  omp-wanwandequ chat [--preset turbo]  # same interactive TUI\n`);
+	process.stdout.write(`  omp-wanwandequ                         # chat if no team token; otherwise start unattended competition\n`);
+	process.stdout.write(`  omp-wanwandequ chat [--preset turbo]  # force interactive test/TUI even when a team token is configured\n`);
 	process.stdout.write(`  omp-wanwandequ doctor [--preset turbo]\n`);
 	process.stdout.write(`  omp-wanwandequ agents\n`);
 	process.stdout.write(`  omp-wanwandequ presets\n`);
@@ -70,7 +70,7 @@ function printHelp(): void {
 	process.stdout.write(`  omp-wanwandequ bench <path> [--repeat 3] [--expect flag{...}] [--inner 2|4|6] [--advisor] [--preset turbo]\n`);
 	process.stdout.write(`  omp-wanwandequ run [--duration 1800] [--preset turbo] [--dry-run] [--root DIR] [--categories pwn,reverse] [--questions 1,2]\n\n`);
 	process.stdout.write(`All console output is mirrored to ./logs in the launch working directory.\n`);
-	process.stdout.write(`Competition run reads WQ_TEAM_TOKEN. Organizer gateway provider may be selected only with WANWANDEQU_PROVIDER; the model id remains ${WANWANDEQU_MODEL_ID}.\n`);
+	process.stdout.write(`Setting WQ_TEAM_TOKEN arms no-argument unattended competition mode. Organizer gateway provider may be selected only with WANWANDEQU_PROVIDER; the model id remains ${WANWANDEQU_MODEL_ID}.\n`);
 }
 
 async function doctor(argv: string[]): Promise<void> {
@@ -84,6 +84,7 @@ async function doctor(argv: string[]): Promise<void> {
 	process.stdout.write(`[WQ] preset=${preset.name} activeChallenges=${preset.activeChallenges} inner=${settings.get("task.maxConcurrency")} recursion=${settings.get("task.maxRecursionDepth")}\n`);
 	process.stdout.write(`[WQ] batch=${settings.get("task.batch")} effort=${settings.get("task.enableEffort")} advisor=${settings.get("advisor.enabled")}\n`);
 	process.stdout.write(`[WQ] compaction=${settings.get("compaction.enabled")} asyncCompaction=${settings.get("compaction.asyncEnabled")} loopGuard=${settings.get("model.toolCallLoopGuard.enabled")}\n`);
+	process.stdout.write(`[WQ] teamToken=${process.env.WQ_TEAM_TOKEN?.trim() ? "configured/ARMED" : "not-configured/test-mode"}\n`);
 	process.stdout.write(`[WQ] bundledAgents=${agents.map(agent => agent.name).join(",")}\n`);
 	const required = [
 		"wq-worker",
@@ -154,7 +155,7 @@ async function bench(argv: string[]): Promise<void> {
 async function run(argv: string[]): Promise<void> {
 	rejectModelOverride(argv);
 	const token = value(argv, "--token") ?? process.env.WQ_TEAM_TOKEN ?? "";
-	if (!token.trim()) throw new Error("WQ_TEAM_TOKEN is required for `omp-wanwandequ run`");
+	if (!token.trim()) throw new Error("WQ_TEAM_TOKEN is required for autonomous competition mode");
 	await runWqCompetition({
 		token,
 		queryUrl: process.env.WQ_QUERY_URL || DEFAULT_QUERY_URL,
@@ -174,13 +175,26 @@ async function run(argv: string[]): Promise<void> {
 	});
 }
 
+async function auto(argv: string[]): Promise<void> {
+	if (process.env.WQ_TEAM_TOKEN?.trim()) {
+		process.stdout.write("[WQ] team token configured -> ARMED unattended competition mode\n");
+		await run(["run", ...argv.slice(1)]);
+		return;
+	}
+	process.stdout.write("[WQ] no team token -> interactive test mode (run installer again and set the token to arm competition mode)\n");
+	await chat(["chat", ...argv.slice(1)]);
+}
+
 export async function runWqCommand(argv: string[]): Promise<void> {
-	const action = (argv[0] ?? "chat").toLowerCase();
+	const action = (argv[0] ?? "auto").toLowerCase();
 	switch (action) {
 		case "help":
 		case "--help":
 		case "-h":
 			printHelp();
+			return;
+		case "auto":
+			await auto(argv);
 			return;
 		case "chat":
 			await chat(argv);
