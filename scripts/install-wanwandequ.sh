@@ -2,8 +2,9 @@
 set -euo pipefail
 
 REPO="YHalo-wyh/omp-wanwandequ"
-VERSION="${OMP_WANWANDEQU_VERSION:-latest}"
+TAG="${OMP_WANWANDEQU_VERSION:-wq-dev}"
 INSTALL_DIR="${OMP_WANWANDEQU_INSTALL_DIR:-$HOME/.local/bin}"
+CONFIG_DIR="${WANWANDEQU_CONFIG_DIR:-$HOME/.omp-wanwandequ}"
 
 case "$(uname -s)" in
   Linux) platform="linux" ;;
@@ -18,32 +19,45 @@ case "$(uname -m)" in
 esac
 
 asset="omp-wanwandequ-${platform}-${arch}"
-api="https://api.github.com/repos/${REPO}/releases"
-if [[ "$VERSION" == "latest" ]]; then
-  release_url="${api}/latest"
+checksum_asset="${asset}.sha256"
+base="https://github.com/${REPO}/releases/download/${TAG}"
+
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
+tmp="${INSTALL_DIR}/.omp-wanwandequ.$$"
+cleanup() { rm -f "$tmp" "${tmp}.sha256"; }
+trap cleanup EXIT
+
+printf '[WQ] downloading %s (%s/%s) ...\n' "$TAG" "$platform" "$arch"
+curl -fL --retry 4 --retry-all-errors --connect-timeout 10 "${base}/${asset}" -o "$tmp"
+curl -fL --retry 4 --retry-all-errors --connect-timeout 10 "${base}/${checksum_asset}" -o "${tmp}.sha256"
+expected="$(awk '{print tolower($1)}' "${tmp}.sha256")"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmp" | awk '{print tolower($1)}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmp" | awk '{print tolower($1)}')"
 else
-  [[ "$VERSION" == v* ]] || VERSION="v${VERSION}"
-  release_url="${api}/tags/${VERSION}"
-fi
-
-json="$(curl -fsSL --connect-timeout 10 --max-time 60 -H 'User-Agent: omp-wanwandequ-installer' "$release_url")"
-download_url="$(printf '%s' "$json" | python3 -c 'import json,sys; d=json.load(sys.stdin); name=sys.argv[1]; print(next((a["browser_download_url"] for a in d.get("assets",[]) if a.get("name")==name), ""))' "$asset")"
-tag="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name","unknown"))')"
-
-if [[ -z "$download_url" ]]; then
-  echo "Release $tag does not contain $asset" >&2
+  echo "Need sha256sum or shasum to verify the download." >&2
   exit 1
 fi
-
-mkdir -p "$INSTALL_DIR"
-tmp="${INSTALL_DIR}/.omp-wanwandequ.$$"
-curl -fL --connect-timeout 10 --max-time 180 "$download_url" -o "$tmp"
+if [[ "$actual" != "$expected" ]]; then
+  echo "SHA256 mismatch: expected $expected got $actual" >&2
+  exit 1
+fi
 chmod +x "$tmp"
 mv -f "$tmp" "${INSTALL_DIR}/omp-wanwandequ"
+rm -f "${tmp}.sha256"
+trap - EXIT
 
-echo "Installed omp-wanwandequ $tag -> ${INSTALL_DIR}/omp-wanwandequ"
-case ":$PATH:" in
-  *":$INSTALL_DIR:"*) ;;
-  *) echo "Add $INSTALL_DIR to PATH before using omp-wanwandequ." ;;
-esac
+# Match the official OMP experience: install one command and make it discoverable
+# from future bash/zsh shells. Existing WQ credentials/config are never overwritten.
+path_line='export PATH="$HOME/.local/bin:$PATH"'
+for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  touch "$profile"
+  grep -Fq "$path_line" "$profile" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$profile"
+done
+
+printf '[WQ] installed -> %s\n' "${INSTALL_DIR}/omp-wanwandequ"
+printf '[WQ] config    -> %s\n' "$CONFIG_DIR"
+printf '[WQ] configure inside the agent with /wq-key and /wq-token\n'
+printf '[WQ] run now: %s/omp-wanwandequ\n' "$INSTALL_DIR"
 "${INSTALL_DIR}/omp-wanwandequ" doctor
