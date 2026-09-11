@@ -1,25 +1,42 @@
 import { describe, expect, it } from "bun:test";
-import { commands } from "@oh-my-pi/pi-coding-agent/cli-commands";
-import { loadBundledAgents } from "@oh-my-pi/pi-coding-agent/task/agents";
+import * as path from "node:path";
+
+const src = path.join(import.meta.dir, "..", "src");
+
+async function text(relative: string): Promise<string> {
+	return Bun.file(path.join(src, relative)).text();
+}
 
 describe("WQ native integration", () => {
-	it("registers wq as a real top-level command", () => {
-		expect(commands.some(command => command.name === "wq")).toBe(true);
+	it("registers wq as a real top-level command", async () => {
+		const source = await text("cli-commands.ts");
+		expect(source).toContain('name: "wq"');
+		expect(source).toContain('import("./commands/wq")');
 	});
 
-	it("ships competition agents inside the binary", () => {
-		const agents = loadBundledAgents();
-		for (const name of ["wq-worker", "wq-critic", "wq-verifier", "wq-solver"]) {
-			const agent = agents.find(item => item.name === name);
-			expect(agent, `${name} missing`).toBeDefined();
-			expect(agent?.source).toBe("bundled");
+	it("ships all competition agents inside the binary", async () => {
+		const source = await text("task/agents.ts");
+		for (const name of [
+			"wq-worker",
+			"wq-critic",
+			"wq-verifier",
+			"wq-solver",
+			"wq-pwn",
+			"wq-reverse",
+			"wq-web",
+			"wq-crypto",
+			"wq-forensics",
+		]) {
+			expect(source, `${name} missing from bundled agent table`).toContain(`${name}.md`);
+			const prompt = await text(`prompts/agents/${name}.md`);
+			expect(prompt).toContain(`name: ${name}`);
 		}
 	});
 
-	it("prevents unlimited recursive WQ spawning", () => {
-		const solver = loadBundledAgents().find(item => item.name === "wq-solver");
-		const worker = loadBundledAgents().find(item => item.name === "wq-worker");
-		expect(solver?.spawns).toContain("wq-worker");
-		expect(worker?.spawns ?? "").toBe("");
+	it("prevents recursive specialist spawning", async () => {
+		const solver = await text("prompts/agents/wq-solver.md");
+		const worker = await text("prompts/agents/wq-worker.md");
+		expect(solver).toContain("wq-pwn,wq-reverse,wq-web,wq-crypto,wq-forensics");
+		expect(worker).toContain('spawns: ""');
 	});
 });
