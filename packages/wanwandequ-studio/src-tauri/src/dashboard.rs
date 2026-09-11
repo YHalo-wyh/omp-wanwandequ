@@ -1,6 +1,14 @@
 use serde::Serialize;
 use serde_json::Value;
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const HEARTBEAT_FRESH_MS: u64 = 12_000;
+const HEARTBEAT_FUTURE_SKEW_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ChallengeView {
@@ -30,6 +38,7 @@ pub struct DashboardSnapshot {
     pub active: usize,
     pub last_event_seq: u64,
     pub last_event_at: Option<u64>,
+    pub last_heartbeat_at: Option<u64>,
     pub running: bool,
     pub challenges: Vec<ChallengeView>,
 }
@@ -51,6 +60,25 @@ fn value_u64(v: Option<&Value>) -> Option<u64> {
 
 fn value_string(v: Option<&Value>) -> Option<String> {
     v.and_then(Value::as_str).map(ToOwned::to_owned)
+}
+
+fn now_ms() -> Option<u64> {
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    u64::try_from(duration.as_millis()).ok()
+}
+
+fn heartbeat_fresh(runtime: &Path) -> (bool, Option<u64>) {
+    let heartbeat = read_json(&runtime.join("heartbeat.json"));
+    let updated_at = heartbeat.as_ref().and_then(|value| value_u64(value.get("updatedAt")));
+    let Some(updated_at) = updated_at else {
+        return (false, None);
+    };
+    let Some(now) = now_ms() else {
+        return (false, Some(updated_at));
+    };
+    let not_implausibly_future = updated_at <= now.saturating_add(HEARTBEAT_FUTURE_SKEW_MS);
+    let fresh = not_implausibly_future && now.saturating_sub(updated_at) <= HEARTBEAT_FRESH_MS;
+    (fresh, Some(updated_at))
 }
 
 fn read_workspace_metadata(root: &Path) -> BTreeMap<String, ChallengeMetadata> {
@@ -112,6 +140,8 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
         }
     }
 
+    // events.jsonl is an immutable history. It tells us whether the latest known
+    // lifecycle entered a run, but it cannot prove that the process is still alive.
     let events_path = runtime.join("events.jsonl");
     if let Ok(text) = fs::read_to_string(events_path) {
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
@@ -160,6 +190,9 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
         }
     }
 
+    let (heartbeat_is_fresh, heartbeat_at) = heartbeat_fresh(&runtime);
+    snapshot.last_heartbeat_at = heartbeat_at;
+    snapshot.running = snapshot.running && heartbeat_is_fresh;
     if !snapshot.running {
         clear_active(&mut challenges);
     }
