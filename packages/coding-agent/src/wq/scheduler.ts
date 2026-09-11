@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { WqEventLog } from "./events";
 import { WqPlatformClient, type WqChallenge } from "./platform";
 import { challengePriority, mergeHandoffFile, WqStateStore, writeChallengeContext } from "./state";
 import { resolveWqPreset, type WqPresetName } from "./preset";
@@ -51,9 +52,6 @@ function resultGrounded(result: WqResult, rejectedFlags: readonly string[]): boo
 	if (!flag || flag.includes("\n") || flag.length > 512 || rejectedFlags.includes(flag)) return false;
 	const lower = flag.toLowerCase();
 	if (/example|fake[_-]?flag|not[_-]?the[_-]?flag|placeholder/.test(lower)) return false;
-	// The verifier/parent must put the literal candidate inside at least one
-	// provenance line. This prevents a naked model-final answer from crossing the
-	// deterministic submit gate.
 	return result.evidence.some(item => item.includes(flag));
 }
 
@@ -133,6 +131,7 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	const logsDir = path.join(runtimeRoot, "logs");
 	await Promise.all([fs.mkdir(runtimeRoot, { recursive: true }), fs.mkdir(workspaceRoot, { recursive: true })]);
 	const stateStore = await WqStateStore.open(runtimeRoot);
+	const events = await WqEventLog.open(runtimeRoot);
 	const platform = new WqPlatformClient({
 		token: options.token,
 		queryUrl: options.queryUrl,
@@ -144,6 +143,13 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	const active = new Map<string, Promise<VisitOutcome>>();
 	let lastRemote: WqChallenge[] = [];
 
+	await events.emit("run.started", {
+		preset: basePreset.name,
+		activeChallenges: basePreset.activeChallenges,
+		innerConcurrency: basePreset.innerConcurrency,
+		durationSeconds,
+		dryRun: options.dryRun === true,
+	});
 	process.stdout.write(
 		`[WQ] competition mode preset=${basePreset.name} active=${basePreset.activeChallenges} inner=${basePreset.innerConcurrency} duration=${durationSeconds}s dryRun=${options.dryRun === true}\n`,
 	);
@@ -151,8 +157,14 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	while (Date.now() < deadline) {
 		try {
 			lastRemote = await platform.listChallenges();
+			await events.emit("platform.polled", {
+				visible: lastRemote.length,
+				solved: lastRemote.filter(item => item.isSolved).length,
+			});
 		} catch (error) {
-			process.stderr.write(`[WQ] platform poll failed: ${error instanceof Error ? error.message : String(error)}\n`);
+			const message = error instanceof Error ? error.message : String(error);
+			process.stderr.write(`[WQ] platform poll failed: ${message}\n`);
+			await events.emit("platform.poll_failed", { message });
 		}
 
 		for (const challenge of lastRemote) {
@@ -193,6 +205,14 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 			}
 			const visit = stateStore.markVisitStarted(challenge.questionId);
 			await stateStore.save();
+			await events.emit("challenge.started", {
+				questionId: challenge.questionId,
+				title: challenge.title,
+				category: challenge.category,
+				visit,
+				preset: launchPreset,
+				solvedNumber: challenge.solvedNumber,
+			});
 			process.stdout.write(
 				`[WQ] launch q=${challenge.questionId} cat=${challenge.category} visit=${visit} preset=${launchPreset} solvedBy=${challenge.solvedNumber}\n`,
 			);
@@ -206,6 +226,7 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 				visibleScope.every(challenge => challenge.isSolved || stateStore.challenge(challenge.questionId).solved)
 			) {
 				process.stdout.write("[WQ] all visible in-scope challenges solved\n");
+				await events.emit("run.scope_solved", { visible: visibleScope.length });
 				break;
 			}
 			await Bun.sleep(memoryHealthy(currentPreset.minFreeMemoryRatio) ? 1800 : 3500);
@@ -226,17 +247,36 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 			process.stderr.write(
 				`[WQ] q=${outcome.challenge.questionId} visit=${outcome.visit} no structured result exit=${outcome.exitCode} timeout=${outcome.timedOut}\n`,
 			);
+			await events.emit("visit.unstructured", {
+				questionId: outcome.challenge.questionId,
+				visit: outcome.visit,
+				exitCode: outcome.exitCode,
+				timedOut: outcome.timedOut,
+				elapsedMs: outcome.elapsedMs,
+			});
 			continue;
 		}
 		stateStore.mergeResult(outcome.challenge.questionId, result, outcome.elapsedMs);
 		await mergeHandoffFile(outcome.workspace, localState, result);
+		await events.emit("visit.completed", {
+			questionId: outcome.challenge.questionId,
+			visit: outcome.visit,
+			status: result.status,
+			elapsedMs: outcome.elapsedMs,
+			facts: result.facts.length,
+			artifacts: result.artifacts.length,
+			requestReset: result.request_reset,
+		});
 
 		if (result.request_reset && outcome.challenge.interactive && !resultGrounded(result, localState.rejectedFlags)) {
 			try {
 				const reset = await platform.reset(outcome.challenge.questionId);
 				process.stdout.write(`[WQ] q=${outcome.challenge.questionId} controller reset=${reset}\n`);
+				await events.emit("challenge.reset", { questionId: outcome.challenge.questionId, reset });
 			} catch (error) {
-				process.stderr.write(`[WQ] q=${outcome.challenge.questionId} reset failed: ${error instanceof Error ? error.message : String(error)}\n`);
+				const message = error instanceof Error ? error.message : String(error);
+				process.stderr.write(`[WQ] q=${outcome.challenge.questionId} reset failed: ${message}\n`);
+				await events.emit("challenge.reset_failed", { questionId: outcome.challenge.questionId, message });
 			}
 		}
 
@@ -244,22 +284,28 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 			if (!resultGrounded(result, localState.rejectedFlags)) {
 				process.stderr.write(`[WQ] q=${outcome.challenge.questionId} candidate rejected by deterministic grounding gate\n`);
 				if (result.flag) stateStore.rejectFlag(outcome.challenge.questionId, result.flag);
+				await events.emit("candidate.rejected", { questionId: outcome.challenge.questionId, reason: "grounding" });
 			} else if (options.dryRun) {
 				process.stdout.write(`[WQ] DRY-RUN q=${outcome.challenge.questionId} verified-candidate=${result.flag}\n`);
+				await events.emit("candidate.verified", { questionId: outcome.challenge.questionId, dryRun: true });
 			} else {
 				try {
+					await events.emit("submit.started", { questionId: outcome.challenge.questionId });
 					const submitted = await platform.submit(outcome.challenge.questionId, result.flag);
 					if (submitted.correct) {
 						stateStore.markSolved(outcome.challenge.questionId);
 						process.stdout.write(`[WQ] SOLVED q=${outcome.challenge.questionId} flag=${result.flag}\n`);
+						await events.emit("submit.accepted", { questionId: outcome.challenge.questionId });
 					} else {
 						stateStore.rejectFlag(outcome.challenge.questionId, result.flag);
-						process.stderr.write(
-							`[WQ] q=${outcome.challenge.questionId} submit rejected: ${submitted.message || `status=${submitted.status}`}\n`,
-						);
+						const message = submitted.message || `status=${submitted.status}`;
+						process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit rejected: ${message}\n`);
+						await events.emit("submit.rejected", { questionId: outcome.challenge.questionId, message });
 					}
 				} catch (error) {
-					process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit error: ${error instanceof Error ? error.message : String(error)}\n`);
+					const message = error instanceof Error ? error.message : String(error);
+					process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit error: ${message}\n`);
+					await events.emit("submit.error", { questionId: outcome.challenge.questionId, message });
 				}
 			}
 		}
@@ -272,5 +318,7 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	}
 	await stateStore.save();
 	const solvedCount = Object.values(stateStore.state.challenges).filter(item => item.solved).length;
+	await events.emit("run.finished", { solved: solvedCount, challenges: Object.keys(stateStore.state.challenges).length });
+	await events.flush();
 	process.stdout.write(`[WQ] finished solved=${solvedCount} state=${stateStore.file}\n`);
 }
