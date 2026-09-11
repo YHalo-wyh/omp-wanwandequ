@@ -68,6 +68,38 @@ jobs:
           $dir = "packages/wanwandequ-studio/src-tauri/binaries"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item "packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe" "$dir/omp-wanwandequ-x86_64-pc-windows-msvc.exe" -Force
+      - name: Smoke test Wanwandequ native RPC
+        shell: powershell
+        run: |
+          $exe = (Resolve-Path "packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe").Path
+          $help = (& $exe help 2>&1 | Out-String)
+          if ($help -notmatch "headless JSONL RPC runtime") { throw "runtime command missing from bundled Agent" }
+
+          $env:DEEPSEEK_API_KEY = "ci-smoke-placeholder"
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $exe
+          $psi.ArgumentList.Add("runtime")
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $process = New-Object System.Diagnostics.Process
+          $process.StartInfo = $psi
+          if (-not $process.Start()) { throw "failed to start runtime" }
+          try {
+            $readyTask = $process.StandardOutput.ReadLineAsync()
+            if (-not $readyTask.Wait(20000)) { throw "runtime ready frame timed out: $($process.StandardError.ReadToEnd())" }
+            $ready = $readyTask.Result
+            if ($ready -notmatch '"type":"ready"') { throw "unexpected first runtime frame: $ready" }
+            $process.StandardInput.WriteLine('{"id":"ci-state","type":"get_state"}')
+            $process.StandardInput.Flush()
+            $stateTask = $process.StandardOutput.ReadLineAsync()
+            if (-not $stateTask.Wait(10000)) { throw "get_state response timed out" }
+            $state = $stateTask.Result
+            if ($state -notmatch '"command":"get_state"' -or $state -notmatch '"success":true') { throw "unexpected get_state response: $state" }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+          }
       - name: Check Studio Rust backend
         shell: powershell
         run: cargo check --manifest-path packages/wanwandequ-studio/src-tauri/Cargo.toml
