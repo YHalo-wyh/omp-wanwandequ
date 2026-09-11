@@ -196,14 +196,15 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 			process.stdout.write(
 				`[WQ] launch q=${challenge.questionId} cat=${challenge.category} visit=${visit} preset=${launchPreset} solvedBy=${challenge.solvedNumber}\n`,
 			);
-			active.set(
-				challenge.questionId,
-				runVisit(challenge, visit, workspace, logsDir, launchPreset, options),
-			);
+			active.set(challenge.questionId, runVisit(challenge, visit, workspace, logsDir, launchPreset, options));
 		}
 
 		if (active.size === 0) {
-			if (lastRemote.length > 0 && lastRemote.every(ch => ch.isSolved || stateStore.challenge(ch.questionId).solved)) {
+			const visibleScope = lastRemote.filter(challenge => scoped(challenge, options));
+			if (
+				visibleScope.length > 0 &&
+				visibleScope.every(challenge => challenge.isSolved || stateStore.challenge(challenge.questionId).solved)
+			) {
 				process.stdout.write("[WQ] all visible in-scope challenges solved\n");
 				break;
 			}
@@ -211,10 +212,11 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 			continue;
 		}
 
-		const completion = await Promise.race([
-			...active.entries().map(async ([questionId, promise]) => ({ questionId, outcome: await promise })),
-			Bun.sleep(1800).then(() => undefined),
-		]);
+		const completions = Array.from(active.entries(), async ([questionId, promise]) => ({
+			questionId,
+			outcome: await promise,
+		}));
+		const completion = await Promise.race([...completions, Bun.sleep(1800).then(() => undefined)]);
 		if (!completion) continue;
 		active.delete(completion.questionId);
 		const { outcome } = completion;
