@@ -75,6 +75,41 @@ jobs:
           $help = (& $exe help 2>&1 | Out-String)
           if ($help -notmatch "headless JSONL RPC runtime") { throw "runtime command missing from bundled Agent" }
 
+          function Read-RpcFrame {
+            param(
+              [System.Diagnostics.Process]$Process,
+              [scriptblock]$Match,
+              [int]$TimeoutMs = 15000
+            )
+            $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+            $seen = New-Object System.Collections.Generic.List[string]
+            while ([DateTime]::UtcNow -lt $deadline) {
+              $remaining = [Math]::Max(1, [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+              $task = $Process.StandardOutput.ReadLineAsync()
+              if (-not $task.Wait($remaining)) { break }
+              $line = $task.Result
+              if ($null -eq $line) {
+                if ($Process.HasExited) { break }
+                continue
+              }
+              if ([string]::IsNullOrWhiteSpace($line)) { continue }
+              $seen.Add($line)
+              try {
+                $frame = $line | ConvertFrom-Json -ErrorAction Stop
+                if (& $Match $frame) { return $frame }
+              } catch {
+                # stdout should be JSON-only in RPC mode, but keep the smoke test
+                # diagnostic-friendly instead of treating one stray line as the target.
+              }
+            }
+            $tail = ($seen | Select-Object -Last 8) -join "`n"
+            if ($Process.HasExited) {
+              $stderr = $Process.StandardError.ReadToEnd()
+              throw "RPC process exited before expected frame. stdout tail:`n$tail`nstderr:`n$stderr"
+            }
+            throw "RPC frame timed out. stdout tail:`n$tail"
+          }
+
           $env:DEEPSEEK_API_KEY = "ci-smoke-placeholder"
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = $exe
@@ -87,16 +122,20 @@ jobs:
           $process.StartInfo = $psi
           if (-not $process.Start()) { throw "failed to start runtime" }
           try {
-            $readyTask = $process.StandardOutput.ReadLineAsync()
-            if (-not $readyTask.Wait(20000)) { throw "runtime ready frame timed out" }
-            $ready = $readyTask.Result
-            if ($ready -notmatch '"type":"ready"') { throw "unexpected first runtime frame: $ready" }
+            $ready = Read-RpcFrame $process { param($f) $f.type -eq "ready" } 20000
+            if ($ready.supportedProtocolVersions -notcontains 2) { throw "RPC protocol v2 is not advertised" }
+
+            # Verify the useful state path while still on protocol v1, then negotiate
+            # v2. Studio has its own chunk-reassembly tests for large v2 frames.
             $process.StandardInput.WriteLine('{"id":"ci-state","type":"get_state"}')
             $process.StandardInput.Flush()
-            $stateTask = $process.StandardOutput.ReadLineAsync()
-            if (-not $stateTask.Wait(10000)) { throw "get_state response timed out" }
-            $state = $stateTask.Result
-            if ($state -notmatch '"command":"get_state"' -or $state -notmatch '"success":true') { throw "unexpected get_state response: $state" }
+            $state = Read-RpcFrame $process { param($f) $f.type -eq "response" -and $f.id -eq "ci-state" } 10000
+            if (-not $state.success -or $state.command -ne "get_state") { throw "get_state failed: $($state | ConvertTo-Json -Compress)" }
+
+            $process.StandardInput.WriteLine('{"id":"ci-proto","type":"negotiate_protocol","protocolVersion":2}')
+            $process.StandardInput.Flush()
+            $proto = Read-RpcFrame $process { param($f) $f.type -eq "response" -and $f.id -eq "ci-proto" } 10000
+            if (-not $proto.success -or $proto.data.protocolVersion -ne 2) { throw "protocol v2 negotiation failed: $($proto | ConvertTo-Json -Compress)" }
           } finally {
             if (-not $process.HasExited) { $process.Kill() }
           }
