@@ -7,6 +7,8 @@ on:
       - main
     paths:
       - "packages/wanwandequ-studio/**"
+      - "packages/coding-agent/src/wq/events.ts"
+      - "packages/coding-agent/src/wq/scheduler.ts"
       - ".github/workflows/wq-studio-ci.yml"
   workflow_dispatch:
 
@@ -27,9 +29,18 @@ jobs:
         with:
           bun-version: 1.4.0
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install frontend dependencies
+      - name: Install dependencies
         shell: powershell
         run: bun install --ignore-scripts
+      - name: Type check Wanwandequ runtime
+        shell: powershell
+        run: bun --cwd=packages/coding-agent run check:types
+      - name: Build Studio frontend
+        shell: powershell
+        run: bun --cwd=packages/wanwandequ-studio run build:web
+      - name: Check Studio Rust backend
+        shell: powershell
+        run: cargo check --manifest-path packages/wanwandequ-studio/src-tauri/Cargo.toml
       - name: Stage bundled Wanwandequ agent
         shell: powershell
         run: |
@@ -77,5 +88,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Wanwandequ Studio rolling dev" \
-            --notes "Wanwandequ Studio v0.1: lightweight desktop CTF IDE shell with embedded agent binary, PTY terminal, workspace browser, credential controls, competition arming, and audit-friendly logs." \
+            --notes "Wanwandequ Studio v0.2: desktop CTF IDE shell with real PTY terminal, persistent state/event dashboard, workspace browser, credential controls, explicit TEST/ARMED launch paths, and audit-friendly logs." \
             --prerelease
