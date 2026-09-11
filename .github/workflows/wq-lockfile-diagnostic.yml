@@ -1,0 +1,29 @@
+name: WQ lockfile diagnostic
+
+on:
+  push:
+    branches:
+      - wq/runtime-v1
+    paths:
+      - .github/workflows/wq-lockfile-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Refresh lockfile only
+        run: bun install --ignore-scripts --lockfile-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-bun-lock
+          path: bun.lock
+          if-no-files-found: error
+          retention-days: 1
