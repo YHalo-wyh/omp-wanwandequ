@@ -9,6 +9,7 @@ on:
       - "packages/wanwandequ-studio/**"
       - "packages/coding-agent/src/wq/events.ts"
       - "packages/coding-agent/src/wq/scheduler.ts"
+      - "packages/coding-agent/test/wq-events.test.ts"
       - ".github/workflows/wq-studio-ci.yml"
   workflow_dispatch:
 
@@ -35,6 +36,9 @@ jobs:
       - name: Type check Wanwandequ runtime
         shell: powershell
         run: bun --cwd=packages/coding-agent run check:types
+      - name: Test observer event log
+        shell: powershell
+        run: bun test packages/coding-agent/test/wq-events.test.ts
       - name: Build Studio frontend
         shell: powershell
         run: bun --cwd=packages/wanwandequ-studio run build:web
