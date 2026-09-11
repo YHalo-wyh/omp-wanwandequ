@@ -2,12 +2,19 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { installWqAuditLogging } from "./wq/logging";
 
 // Wanwandequ is a separate installed agent, not an OMP profile. Keep its
 // credentials, models.yml, sessions and caches isolated from a normal `omp`
 // installation unless the operator explicitly chooses another config root.
 process.env.PI_CONFIG_DIR ||= process.env.WANWANDEQU_CONFIG_DIR || path.join(os.homedir(), ".omp-wanwandequ");
 process.env.OMP_CONFIG_DIR ||= process.env.PI_CONFIG_DIR;
+
+// Every invocation leaves an auditable transcript in the launch working
+// directory. This is intentionally outside the private config root so a
+// competition organizer can inspect/copy the run evidence directly.
+const audit = installWqAuditLogging(process.cwd());
+process.env.WANWANDEQU_LOG_DIR ||= audit.logDir;
 
 function normalizeWanwanArgv(argv: string[]): string[] {
 	const first = argv[0];
