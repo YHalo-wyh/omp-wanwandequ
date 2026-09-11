@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	acquireWqControllerLease,
 	clearWqControl,
 	controlPath,
 	createWqRunId,
 	heartbeatPath,
 	readWqControl,
+	releaseWqControllerLease,
 	writeJsonAtomic,
 	writeWqHeartbeat,
 } from "../src/wq/controller-state";
@@ -73,5 +75,18 @@ describe("WQ controller state", () => {
 		expect(await fs.readFile(controlPath(runtime), "utf8")).toContain(runId);
 		await clearWqControl(runtime, runId);
 		await expect(fs.readFile(controlPath(runtime), "utf8")).rejects.toBeDefined();
+	});
+
+	test("rejects a second fresh controller and releases only its owner", async () => {
+		const runtime = await tempRuntime();
+		const first = createWqRunId();
+		const second = createWqRunId();
+		await acquireWqControllerLease(runtime, first);
+		await expect(acquireWqControllerLease(runtime, second)).rejects.toThrow("already active");
+		await releaseWqControllerLease(runtime, second);
+		await expect(acquireWqControllerLease(runtime, second)).rejects.toThrow("already active");
+		await releaseWqControllerLease(runtime, first);
+		await acquireWqControllerLease(runtime, second);
+		await releaseWqControllerLease(runtime, second);
 	});
 });
