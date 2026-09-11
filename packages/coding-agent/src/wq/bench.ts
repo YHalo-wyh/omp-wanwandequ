@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { wanwandequModelSelector } from "./model";
 import { resolveWqPreset, type WqPresetName } from "./preset";
 import { spawnSelfCapture } from "./self";
 import { parseWqResult } from "./system";
@@ -13,8 +14,6 @@ export interface WqBenchOptions {
 	preset?: WqPresetName;
 	innerConcurrency?: number;
 	advisor?: boolean;
-	model?: string;
-	provider?: string;
 	thinking?: string;
 	root?: string;
 }
@@ -67,8 +66,6 @@ export async function runWqBench(options: WqBenchOptions): Promise<void> {
 		if (options.category) args.push("--category", options.category);
 		if (options.innerConcurrency) args.push("--inner", String(options.innerConcurrency));
 		if (options.advisor) args.push("--advisor");
-		if (options.provider) args.push("--provider", options.provider);
-		if (options.model) args.push("--model", options.model);
 		if (options.thinking) args.push("--thinking", options.thinking);
 
 		const captured = await spawnSelfCapture(args, {
@@ -104,9 +101,13 @@ export async function runWqBench(options: WqBenchOptions): Promise<void> {
 
 	const successful = runs.filter(run => run.correct === true).length;
 	const elapsed = runs.map(run => Number(run.elapsed_ms)).sort((a, b) => a - b);
-	const median = elapsed.length % 2 ? elapsed[Math.floor(elapsed.length / 2)] : (elapsed[elapsed.length / 2 - 1] + elapsed[elapsed.length / 2]) / 2;
+	const median =
+		elapsed.length % 2
+			? elapsed[Math.floor(elapsed.length / 2)]
+			: (elapsed[elapsed.length / 2 - 1] + elapsed[elapsed.length / 2]) / 2;
 	const summary = {
 		source,
+		model: wanwandequModelSelector(),
 		preset: preset.name,
 		inner_concurrency: options.innerConcurrency ?? preset.innerConcurrency,
 		advisor: options.advisor === true,
