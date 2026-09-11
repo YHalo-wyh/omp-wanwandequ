@@ -6,6 +6,7 @@ import { runRootCommand } from "../main";
 import { createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import { wanwandequModelSelector } from "./model";
 import { resolveWqPreset, wqRuntimeOverrides, type WqPresetName } from "./preset";
+import { materializeWqSkills } from "./skills";
 import { buildWqSolvePrompt, WQ_SYSTEM_PROMPT } from "./system";
 
 export interface WqSolveOptions {
@@ -33,6 +34,12 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 	const cwd = stat.isDirectory() ? target : path.dirname(target);
 	const preset = resolveWqPreset(options.preset);
 	const timeoutSeconds = Math.max(30, Math.floor(options.timeoutSeconds ?? preset.visitSeconds));
+
+	// WQ ships authored OMP skills inside the standalone binary, then materializes
+	// them into the isolated challenge workspace so normal OMP skill discovery and
+	// every delegated subagent see the same competition playbooks.
+	await materializeWqSkills(cwd);
+
 	const settings = await Settings.init({
 		cwd,
 		overrides: wqRuntimeOverrides(preset, {
