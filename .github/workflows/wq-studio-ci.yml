@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - "wq/studio-*"
+      - "wq/runtime-*"
       - main
     paths:
       - "packages/wanwandequ-studio/**"
-      - "packages/coding-agent/src/wq/events.ts"
-      - "packages/coding-agent/src/wq/scheduler.ts"
-      - "packages/coding-agent/test/wq-events.test.ts"
+      - "packages/coding-agent/src/wq/**"
+      - "packages/coding-agent/src/wanwandequ-cli.ts"
+      - "packages/coding-agent/test/wq-*.test.ts"
+      - "scripts/ci-release-build-wanwandequ.ts"
       - ".github/workflows/wq-studio-ci.yml"
   workflow_dispatch:
 
@@ -36,20 +38,36 @@ jobs:
       - name: Type check Wanwandequ runtime
         shell: powershell
         run: bun --cwd=packages/coding-agent run check:types
-      - name: Test observer event log
+      - name: Test WQ observer and Studio RPC adapter
         shell: powershell
-        run: bun test packages/coding-agent/test/wq-events.test.ts
+        run: |
+          bun test packages/coding-agent/test/wq-events.test.ts
+          bun test packages/wanwandequ-studio/src/runtime-protocol.test.ts
       - name: Build Studio frontend
         shell: powershell
         run: bun --cwd=packages/wanwandequ-studio run build:web
-      - name: Stage bundled Wanwandequ agent
+      - name: Stage Windows native addon for current Agent build
         shell: powershell
         run: |
+          $version = node -p "require('./packages/natives/package.json').version"
+          $package = "@oh-my-pi/pi-natives-win32-x64@$version"
+          $tarball = (npm view $package dist.tarball).Trim()
+          $tmp = Join-Path $env:RUNNER_TEMP "wq-native"
+          Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          New-Item -ItemType Directory -Force "packages/natives/native" | Out-Null
+          & curl.exe -fL --retry 3 -o "$tmp/native.tgz" $tarball
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          tar -xzf "$tmp/native.tgz" -C $tmp
+          Copy-Item "$tmp/package/pi_natives.win32-x64*.node" "packages/natives/native/" -Force
+      - name: Build bundled Wanwandequ Agent from this commit
+        shell: powershell
+        run: |
+          bun scripts/ci-release-build-wanwandequ.ts --targets win32-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $dir = "packages/wanwandequ-studio/src-tauri/binaries"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          $url = "https://github.com/YHalo-wyh/omp-wanwandequ/releases/download/wq-dev/omp-wanwandequ-windows-x64.exe"
-          & curl.exe -fL --retry 4 --retry-delay 2 --connect-timeout 20 -o "$dir/omp-wanwandequ-x86_64-pc-windows-msvc.exe" $url
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe" "$dir/omp-wanwandequ-x86_64-pc-windows-msvc.exe" -Force
       - name: Check Studio Rust backend
         shell: powershell
         run: cargo check --manifest-path packages/wanwandequ-studio/src-tauri/Cargo.toml
@@ -74,7 +92,7 @@ jobs:
 
   release:
     name: Publish studio-dev
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/wq/studio-')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/wq/studio-') || startsWith(github.ref, 'refs/heads/wq/runtime-'))
     needs: windows
     runs-on: ubuntu-22.04
     steps:
@@ -92,5 +110,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Wanwandequ Studio rolling dev" \
-            --notes "Wanwandequ Studio v0.3: full Chinese IDE UI, real clickable workspace explorer, PTY-backed conversation composer, native terminal fallback, tool/context observer panels, and direct Wanwandequ API/token/provider/preset configuration without changing the OMP Agent execution chain." \
+            --notes "Wanwandequ Studio v0.4 Runtime-first: Studio talks to OMP AgentSession through the native JSONL RPC protocol instead of PTY/TUI scraping. Structured chat, tool events, Subagent events, context state and extension UI requests are surfaced without replacing OMP tools/MCP/skills/task/compaction. Competition mode remains a separate headless omp-wanwandequ run process." \
             --prerelease
