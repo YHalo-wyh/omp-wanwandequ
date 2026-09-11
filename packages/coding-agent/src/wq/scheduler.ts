@@ -2,10 +2,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	acquireWqControllerLease,
 	clearWqControl,
 	createWqRunId,
 	heartbeatPath,
 	readWqControl,
+	releaseWqControllerLease,
 	writeWqHeartbeat,
 	type WqControllerPhase,
 } from "./controller-state";
@@ -232,10 +234,18 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 		return true;
 	};
 
-	// A control record is addressed to a specific runId, but deleting an old
-	// record before publishing this run also keeps operator-visible state tidy.
-	await clearWqControl(runtimeRoot);
-	await writeWqHeartbeat(runtimeRoot, heartbeat());
+	// The controller owns the competition root independently of Studio. O_EXCL on
+	// controller.lock is the last line of defense against two CLIs/Studios racing
+	// to start the same root; heartbeat freshness lets a later run reclaim a lock
+	// left behind by an actual crash.
+	await acquireWqControllerLease(runtimeRoot, runId);
+	try {
+		await clearWqControl(runtimeRoot);
+		await writeWqHeartbeat(runtimeRoot, heartbeat());
+	} catch (error) {
+		await releaseWqControllerLease(runtimeRoot, runId).catch(() => {});
+		throw error;
+	}
 	const heartbeatTimer = setInterval(() => void queueHeartbeat(), 2000);
 	heartbeatTimer.unref?.();
 
@@ -439,10 +449,12 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 		finishReason = "failed";
 		phase = "stopping";
 		abortActive();
-		await events.emit("run.failed", {
-			runId,
-			message: error instanceof Error ? error.message : String(error),
-		}).catch(() => {});
+		await events
+			.emit("run.failed", {
+				runId,
+				message: error instanceof Error ? error.message : String(error),
+			})
+			.catch(() => {});
 		throw error;
 	} finally {
 		clearInterval(heartbeatTimer);
@@ -450,6 +462,7 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 		await heartbeatWrite;
 		await fs.rm(heartbeatPath(runtimeRoot), { force: true }).catch(() => {});
 		await clearWqControl(runtimeRoot, runId);
+		await releaseWqControllerLease(runtimeRoot, runId).catch(() => {});
 		await events.flush().catch(() => {});
 	}
 }
