@@ -2,113 +2,60 @@
 set -euo pipefail
 
 REPO="YHalo-wyh/omp-wanwandequ"
-TAG="wq-dev"
-ASSET="omp-wanwandequ-linux-x64"
-CHECKSUM_ASSET="${ASSET}.sha256"
-INSTALL_DIR="${HOME}/.local/bin"
-EXE="${INSTALL_DIR}/omp-wanwandequ"
-CONFIG_DIR="${HOME}/.omp-wanwandequ"
-AGENT_DIR="${CONFIG_DIR}/agent"
-ENV_FILE="${CONFIG_DIR}/.env"
-WORK_DIR="${WANWANDEQU_WORKDIR:-$PWD}"
+TAG="${OMP_WANWANDEQU_VERSION:-wq-dev}"
+INSTALL_DIR="${OMP_WANWANDEQU_INSTALL_DIR:-$HOME/.local/bin}"
+CONFIG_DIR="${WANWANDEQU_CONFIG_DIR:-$HOME/.omp-wanwandequ}"
 
-say() { printf '%s\n' "$*"; }
-
-read_env_value() {
-  local key="$1"
-  [[ -f "$ENV_FILE" ]] || return 0
-  awk -F= -v k="$key" '$1==k {sub(/^[^=]*=/,""); gsub(/^\047|\047$/,"",$0); gsub(/^\"|\"$/,"",$0); print; exit}' "$ENV_FILE"
-}
-
-prompt_secret() {
-  local prompt="$1"
-  local value=""
-  if [[ -r /dev/tty ]]; then
-    printf '%s' "$prompt" > /dev/tty
-    IFS= read -r -s value < /dev/tty || true
-    printf '\n' > /dev/tty
-  fi
-  printf '%s' "$value"
-}
-
-say "[WQ] installing OMP-Wanwandequ Linux/WSL rolling build..."
-mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$AGENT_DIR" "$WORK_DIR/logs"
-
-base="https://github.com/${REPO}/releases/download/${TAG}"
-tmp="${EXE}.download"
-curl -fL --retry 3 "${base}/${ASSET}" -o "$tmp"
-curl -fL --retry 3 "${base}/${CHECKSUM_ASSET}" -o "${tmp}.sha256"
-expected="$(awk '{print tolower($1)}' "${tmp}.sha256")"
-actual="$(sha256sum "$tmp" | awk '{print tolower($1)}')"
-rm -f "${tmp}.sha256"
-if [[ "$expected" != "$actual" ]]; then
-  rm -f "$tmp"
-  say "[WQ] SHA256 mismatch: expected $expected got $actual"
-  exit 1
-fi
-mv -f "$tmp" "$EXE"
-chmod +x "$EXE"
-say "[WQ] SHA256 verified: $actual"
-
-# Reuse only normal OMP's non-secret model/config declarations. Secrets remain
-# independent in ~/.omp-wanwandequ/.env.
-if [[ -d "${HOME}/.omp/agent" ]]; then
-  for name in config.yml config.yaml models.yml models.yaml; do
-    src="${HOME}/.omp/agent/${name}"
-    dst="${AGENT_DIR}/${name}"
-    if [[ -f "$src" && ! -f "$dst" ]]; then cp "$src" "$dst"; fi
-  done
-fi
-
-old_api="$(read_env_value DEEPSEEK_API_KEY || true)"
-old_team="$(read_env_value WQ_TEAM_TOKEN || true)"
-
-say ""
-say "[WQ] DeepSeek V4 Flash credential"
-[[ -n "$old_api" ]] && say "    API key already configured; press Enter to keep it."
-api_key="$(prompt_secret 'DeepSeek API Key: ')"
-[[ -z "$api_key" ]] && api_key="$old_api"
-
-say ""
-say "[WQ] Competition team token"
-say "    Leave blank for interactive testing. Once configured, bare 'omp-wanwandequ' means ARMED unattended competition mode."
-[[ -n "$old_team" ]] && say "    Team token already configured; press Enter to keep it."
-team_token="$(prompt_secret 'WQ Team Token (optional until match start): ')"
-[[ -z "$team_token" ]] && team_token="$old_team"
-
-cat > "$ENV_FILE" <<EOF
-# OMP-Wanwandequ standalone secrets/settings. Do not commit this file.
-DEEPSEEK_API_KEY=${api_key}
-WQ_TEAM_TOKEN=${team_token}
-WANWANDEQU_PRESET=turbo
-EOF
-chmod 600 "$ENV_FILE"
-
-# Future shells find the standalone command. The current piped installer cannot
-# mutate its parent's PATH, so it launches via the absolute path immediately.
-case ":${PATH}:" in
-  *":${INSTALL_DIR}:"*) ;;
-  *)
-    profile="${HOME}/.bashrc"
-    [[ -n "${ZSH_VERSION:-}" ]] && profile="${HOME}/.zshrc"
-    touch "$profile"
-    grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' "$profile" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
-    ;;
+case "$(uname -s)" in
+  Linux) platform="linux" ;;
+  Darwin) platform="darwin" ;;
+  *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
-say ""
-say "[WQ] installed -> $EXE"
-say "[WQ] workdir -> $WORK_DIR"
-say "[WQ] logs -> $WORK_DIR/logs"
-say "[WQ] config -> $ENV_FILE"
-if [[ -n "$team_token" ]]; then
-  say "[WQ] status -> ARMED: bare launch starts unattended competition mode"
-else
-  say "[WQ] status -> TEST MODE: bare launch opens interactive agent"
-fi
+case "$(uname -m)" in
+  x86_64|amd64) arch="x64" ;;
+  arm64|aarch64) arch="arm64" ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
 
-cd "$WORK_DIR"
-"$EXE" doctor
-say ""
-say "[WQ] starting..."
-exec "$EXE"
+asset="omp-wanwandequ-${platform}-${arch}"
+checksum_asset="${asset}.sha256"
+base="https://github.com/${REPO}/releases/download/${TAG}"
+
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
+tmp="${INSTALL_DIR}/.omp-wanwandequ.$$"
+cleanup() { rm -f "$tmp" "${tmp}.sha256"; }
+trap cleanup EXIT
+
+printf '[WQ] downloading %s (%s/%s) ...\n' "$TAG" "$platform" "$arch"
+curl -fL --retry 4 --retry-all-errors --connect-timeout 10 "${base}/${asset}" -o "$tmp"
+curl -fL --retry 4 --retry-all-errors --connect-timeout 10 "${base}/${checksum_asset}" -o "${tmp}.sha256"
+expected="$(awk '{print tolower($1)}' "${tmp}.sha256")"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmp" | awk '{print tolower($1)}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmp" | awk '{print tolower($1)}')"
+else
+  echo "Need sha256sum or shasum to verify the download." >&2
+  exit 1
+fi
+if [[ "$actual" != "$expected" ]]; then
+  echo "SHA256 mismatch: expected $expected got $actual" >&2
+  exit 1
+fi
+chmod +x "$tmp"
+mv -f "$tmp" "${INSTALL_DIR}/omp-wanwandequ"
+rm -f "${tmp}.sha256"
+trap - EXIT
+
+path_line='export PATH="$HOME/.local/bin:$PATH"'
+for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  touch "$profile"
+  grep -Fq "$path_line" "$profile" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$profile"
+done
+
+printf '[WQ] installed -> %s\n' "${INSTALL_DIR}/omp-wanwandequ"
+printf '[WQ] config    -> %s\n' "$CONFIG_DIR"
+printf '[WQ] configure inside the agent with /wq-key and /wq-token\n'
+printf '[WQ] run now: %s/omp-wanwandequ\n' "$INSTALL_DIR"
+"${INSTALL_DIR}/omp-wanwandequ" doctor
