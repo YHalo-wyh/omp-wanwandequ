@@ -28,6 +28,19 @@ pub struct ChallengeView {
     pub active: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ControllerView {
+    pub run_id: String,
+    pub pid: u64,
+    pub root: String,
+    pub started_at: u64,
+    pub updated_at: u64,
+    pub deadline: u64,
+    pub preset: String,
+    pub active_challenges: u64,
+    pub phase: String,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct DashboardSnapshot {
     pub started_at: Option<u64>,
@@ -40,6 +53,7 @@ pub struct DashboardSnapshot {
     pub last_event_at: Option<u64>,
     pub last_heartbeat_at: Option<u64>,
     pub running: bool,
+    pub controller: Option<ControllerView>,
     pub challenges: Vec<ChallengeView>,
 }
 
@@ -67,18 +81,39 @@ fn now_ms() -> Option<u64> {
     u64::try_from(duration.as_millis()).ok()
 }
 
-fn heartbeat_fresh(runtime: &Path) -> (bool, Option<u64>) {
-    let heartbeat = read_json(&runtime.join("heartbeat.json"));
-    let updated_at = heartbeat.as_ref().and_then(|value| value_u64(value.get("updatedAt")));
-    let Some(updated_at) = updated_at else {
-        return (false, None);
-    };
+fn parse_controller(runtime: &Path) -> Option<ControllerView> {
+    let heartbeat = read_json(&runtime.join("heartbeat.json"))?;
+    if heartbeat.get("version").and_then(Value::as_u64) != Some(1) {
+        return None;
+    }
+    let run_id = heartbeat.get("runId")?.as_str()?.to_owned();
+    if run_id.len() < 8 || run_id.len() > 128 {
+        return None;
+    }
+    Some(ControllerView {
+        run_id,
+        pid: value_u64(heartbeat.get("pid"))?,
+        root: value_string(heartbeat.get("root")).unwrap_or_default(),
+        started_at: value_u64(heartbeat.get("startedAt"))?,
+        updated_at: value_u64(heartbeat.get("updatedAt"))?,
+        deadline: value_u64(heartbeat.get("deadline"))?,
+        preset: value_string(heartbeat.get("preset")).unwrap_or_default(),
+        active_challenges: value_u64(heartbeat.get("activeChallenges")).unwrap_or(0),
+        phase: value_string(heartbeat.get("phase")).unwrap_or_else(|| "running".to_owned()),
+    })
+}
+
+fn controller_is_fresh(controller: &ControllerView) -> bool {
     let Some(now) = now_ms() else {
-        return (false, Some(updated_at));
+        return false;
     };
-    let not_implausibly_future = updated_at <= now.saturating_add(HEARTBEAT_FUTURE_SKEW_MS);
-    let fresh = not_implausibly_future && now.saturating_sub(updated_at) <= HEARTBEAT_FRESH_MS;
-    (fresh, Some(updated_at))
+    controller.updated_at <= now.saturating_add(HEARTBEAT_FUTURE_SKEW_MS)
+        && now.saturating_sub(controller.updated_at) <= HEARTBEAT_FRESH_MS
+}
+
+pub fn live_controller(root: &Path) -> Option<ControllerView> {
+    let controller = parse_controller(&root.join(".wq"))?;
+    controller_is_fresh(&controller).then_some(controller)
 }
 
 fn read_workspace_metadata(root: &Path) -> BTreeMap<String, ChallengeMetadata> {
@@ -140,8 +175,9 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
         }
     }
 
-    // events.jsonl is an immutable history. It tells us whether the latest known
-    // lifecycle entered a run, but it cannot prove that the process is still alive.
+    // events.jsonl is immutable history. Liveness comes from the controller
+    // heartbeat below, so a crash or GUI restart cannot make an old run.started
+    // record look like a currently running controller.
     let events_path = runtime.join("events.jsonl");
     if let Ok(text) = fs::read_to_string(events_path) {
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
@@ -153,14 +189,6 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
             let data = event.get("data").and_then(Value::as_object);
             let question_id = data.and_then(|d| d.get("questionId")).and_then(Value::as_str);
             match event_type {
-                "run.started" => {
-                    snapshot.running = true;
-                    clear_active(&mut challenges);
-                }
-                "run.finished" | "run.scope_solved" => {
-                    snapshot.running = false;
-                    clear_active(&mut challenges);
-                }
                 "submit.accepted" => snapshot.accepted_submits += 1,
                 "submit.rejected" => snapshot.rejected_submits += 1,
                 "challenge.started" => {
@@ -178,7 +206,7 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
                         }
                     }
                 }
-                "visit.completed" | "visit.unstructured" => {
+                "visit.completed" | "visit.unstructured" | "visit.aborted" => {
                     if let Some(id) = question_id {
                         if let Some(item) = challenges.get_mut(id) {
                             item.active = false;
@@ -190,9 +218,9 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
         }
     }
 
-    let (heartbeat_is_fresh, heartbeat_at) = heartbeat_fresh(&runtime);
-    snapshot.last_heartbeat_at = heartbeat_at;
-    snapshot.running = snapshot.running && heartbeat_is_fresh;
+    snapshot.controller = live_controller(root);
+    snapshot.last_heartbeat_at = snapshot.controller.as_ref().map(|controller| controller.updated_at);
+    snapshot.running = snapshot.controller.is_some();
     if !snapshot.running {
         clear_active(&mut challenges);
     }
