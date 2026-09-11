@@ -1,6 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+	clearWqControl,
+	createWqRunId,
+	heartbeatPath,
+	readWqControl,
+	writeWqHeartbeat,
+	type WqControllerPhase,
+} from "./controller-state";
 import { WqEventLog } from "./events";
 import { WqPlatformClient, type WqChallenge } from "./platform";
 import { challengePriority, mergeHandoffFile, WqStateStore, writeChallengeContext } from "./state";
@@ -34,8 +42,16 @@ interface VisitOutcome {
 	stderr: string;
 	exitCode: number;
 	timedOut: boolean;
+	aborted: boolean;
 	elapsedMs: number;
 }
+
+interface ActiveVisit {
+	promise: Promise<VisitOutcome>;
+	abort: AbortController;
+}
+
+type FinishReason = "deadline" | "scope_solved" | "stop_requested" | "failed";
 
 function safeComponent(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120) || "challenge";
@@ -78,6 +94,7 @@ async function runVisit(
 	logsDir: string,
 	presetName: WqPresetName,
 	options: WqRunOptions,
+	signal: AbortSignal,
 ): Promise<VisitOutcome> {
 	const preset = resolveWqPreset(presetName);
 	const args = [
@@ -103,6 +120,7 @@ async function runVisit(
 		cwd: workspace,
 		timeoutMs: (preset.visitSeconds + 25) * 1000,
 		stripEnv: ["WQ_TEAM_TOKEN"],
+		signal,
 	});
 	await fs.mkdir(logsDir, { recursive: true });
 	const stem = `${safeComponent(challenge.questionId)}-visit-${visit}`;
@@ -114,11 +132,12 @@ async function runVisit(
 		challenge,
 		visit,
 		workspace,
-		result: parseWqResult(captured.stdout),
+		result: captured.aborted ? undefined : parseWqResult(captured.stdout),
 		stdout: captured.stdout,
 		stderr: captured.stderr,
 		exitCode: captured.exitCode,
 		timedOut: captured.timedOut,
+		aborted: captured.aborted,
 		elapsedMs: captured.elapsedMs,
 	};
 }
@@ -140,219 +159,297 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 	});
 	const durationSeconds = Math.max(30, Math.floor(options.durationSeconds ?? 30 * 60));
 	const deadline = Date.now() + durationSeconds * 1000;
-	const active = new Map<string, Promise<VisitOutcome>>();
-	let lastRemote: WqChallenge[] = [];
-
-	// events.jsonl records history; heartbeat.json records current liveness. Keeping
-	// those concepts separate prevents a killed/crashed run from looking alive just
-	// because its last durable event was run.started.
-	const heartbeatFile = path.join(runtimeRoot, "heartbeat.json");
+	const runId = createWqRunId();
 	const heartbeatStartedAt = Date.now();
+	const active = new Map<string, ActiveVisit>();
+	let lastRemote: WqChallenge[] = [];
+	let finishReason: FinishReason = "deadline";
+	let phase: WqControllerPhase = "running";
 	let heartbeatWrite: Promise<void> = Promise.resolve();
-	const writeHeartbeat = () => {
+
+	const heartbeat = () => ({
+		version: 1 as const,
+		runId,
+		pid: process.pid,
+		root,
+		startedAt: heartbeatStartedAt,
+		updatedAt: Date.now(),
+		deadline,
+		preset: basePreset.name,
+		activeChallenges: active.size,
+		phase,
+	});
+	const queueHeartbeat = () => {
 		heartbeatWrite = heartbeatWrite
-			.then(() =>
-				fs.writeFile(
-					heartbeatFile,
-					`${JSON.stringify({
-						pid: process.pid,
-						startedAt: heartbeatStartedAt,
-						updatedAt: Date.now(),
-						deadline,
-						preset: basePreset.name,
-						activeChallenges: active.size,
-					})}\n`,
-					"utf8",
-				),
-			)
+			.then(() => writeWqHeartbeat(runtimeRoot, heartbeat()))
 			.catch(error => {
 				process.stderr.write(`[WQ] heartbeat write failed: ${error instanceof Error ? error.message : String(error)}\n`);
 			});
 		return heartbeatWrite;
 	};
-	await writeHeartbeat();
-	const heartbeatTimer = setInterval(() => void writeHeartbeat(), 2000);
+	const abortActive = () => {
+		for (const visit of active.values()) visit.abort.abort();
+	};
+	const drainActive = async (reason: FinishReason) => {
+		if (active.size === 0) return;
+		abortActive();
+		const pending = [...active.entries()];
+		active.clear();
+		const settled = await Promise.allSettled(pending.map(([, visit]) => visit.promise));
+		for (let index = 0; index < settled.length; index++) {
+			const result = settled[index];
+			const [questionId] = pending[index];
+			if (result.status === "fulfilled") {
+				await events.emit("visit.aborted", {
+					questionId,
+					visit: result.value.visit,
+					reason,
+					elapsedMs: result.value.elapsedMs,
+				});
+			} else {
+				await events.emit("visit.abort_failed", {
+					questionId,
+					reason,
+					message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+				});
+			}
+		}
+	};
+	const stopRequested = async (): Promise<boolean> => {
+		const request = await readWqControl(runtimeRoot, runId);
+		if (!request) return false;
+		if (phase !== "stopping") {
+			phase = "stopping";
+			finishReason = "stop_requested";
+			await events.emit("run.stop_requested", {
+				runId,
+				requestedAt: request.requestedAt,
+				reason: request.reason,
+			});
+			await queueHeartbeat();
+			abortActive();
+		}
+		return true;
+	};
+
+	// A control record is addressed to a specific runId, but deleting an old
+	// record before publishing this run also keeps operator-visible state tidy.
+	await clearWqControl(runtimeRoot);
+	await writeWqHeartbeat(runtimeRoot, heartbeat());
+	const heartbeatTimer = setInterval(() => void queueHeartbeat(), 2000);
 	heartbeatTimer.unref?.();
 
-	await events.emit("run.started", {
-		preset: basePreset.name,
-		activeChallenges: basePreset.activeChallenges,
-		innerConcurrency: basePreset.innerConcurrency,
-		durationSeconds,
-		dryRun: options.dryRun === true,
-	});
-	process.stdout.write(
-		`[WQ] competition mode preset=${basePreset.name} active=${basePreset.activeChallenges} inner=${basePreset.innerConcurrency} duration=${durationSeconds}s dryRun=${options.dryRun === true}\n`,
-	);
-
-	while (Date.now() < deadline) {
-		try {
-			lastRemote = await platform.listChallenges();
-			await events.emit("platform.polled", {
-				visible: lastRemote.length,
-				solved: lastRemote.filter(item => item.isSolved).length,
-			});
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			process.stderr.write(`[WQ] platform poll failed: ${message}\n`);
-			await events.emit("platform.poll_failed", { message });
-		}
-
-		for (const challenge of lastRemote) {
-			if (challenge.isSolved) stateStore.markSolved(challenge.questionId);
-		}
-		await stateStore.save();
-
-		const remainingMs = deadline - Date.now();
-		const rescue = remainingMs <= 5 * 60_000;
-		const launchPreset: WqPresetName = rescue && basePreset.name !== "safe" ? "max" : basePreset.name;
-		const currentPreset = resolveWqPreset(launchPreset);
-		const candidates = lastRemote
-			.filter(challenge => scoped(challenge, options))
-			.filter(challenge => !challenge.isSolved && !stateStore.challenge(challenge.questionId).solved)
-			.filter(challenge => !active.has(challenge.questionId))
-			.filter(challenge => !options.maxVisits || stateStore.challenge(challenge.questionId).visits < options.maxVisits)
-			.sort(
-				(a, b) =>
-					challengePriority(b, stateStore.challenge(b.questionId), { rescue }) -
-					challengePriority(a, stateStore.challenge(a.questionId), { rescue }),
-			);
-
-		while (
-			active.size < currentPreset.activeChallenges &&
-			candidates.length > 0 &&
-			memoryHealthy(currentPreset.minFreeMemoryRatio)
-		) {
-			const challenge = candidates.shift();
-			if (!challenge) break;
-			const workspace = path.join(workspaceRoot, safeComponent(challenge.questionId));
-			const localState = stateStore.challenge(challenge.questionId);
-			await writeChallengeContext(workspace, challenge, localState);
-			try {
-				const attachment = await platform.downloadAttachment(challenge, workspace);
-				if (attachment) process.stdout.write(`[WQ] ${challenge.questionId} attachment=${path.basename(attachment)}\n`);
-			} catch (error) {
-				process.stderr.write(`[WQ] ${challenge.questionId} attachment failed: ${error instanceof Error ? error.message : String(error)}\n`);
-			}
-			const visit = stateStore.markVisitStarted(challenge.questionId);
-			await stateStore.save();
-			await events.emit("challenge.started", {
-				questionId: challenge.questionId,
-				title: challenge.title,
-				category: challenge.category,
-				visit,
-				preset: launchPreset,
-				solvedNumber: challenge.solvedNumber,
-			});
-			process.stdout.write(
-				`[WQ] launch q=${challenge.questionId} cat=${challenge.category} visit=${visit} preset=${launchPreset} solvedBy=${challenge.solvedNumber}\n`,
-			);
-			active.set(challenge.questionId, runVisit(challenge, visit, workspace, logsDir, launchPreset, options));
-		}
-
-		if (active.size === 0) {
-			const visibleScope = lastRemote.filter(challenge => scoped(challenge, options));
-			if (
-				visibleScope.length > 0 &&
-				visibleScope.every(challenge => challenge.isSolved || stateStore.challenge(challenge.questionId).solved)
-			) {
-				process.stdout.write("[WQ] all visible in-scope challenges solved\n");
-				await events.emit("run.scope_solved", { visible: visibleScope.length });
-				break;
-			}
-			await Bun.sleep(memoryHealthy(currentPreset.minFreeMemoryRatio) ? 1800 : 3500);
-			continue;
-		}
-
-		const completions = Array.from(active.entries(), async ([questionId, promise]) => ({
-			questionId,
-			outcome: await promise,
-		}));
-		const completion = await Promise.race([...completions, Bun.sleep(1800).then(() => undefined)]);
-		if (!completion) continue;
-		active.delete(completion.questionId);
-		const { outcome } = completion;
-		const localState = stateStore.challenge(outcome.challenge.questionId);
-		const result = outcome.result;
-		if (!result) {
-			process.stderr.write(
-				`[WQ] q=${outcome.challenge.questionId} visit=${outcome.visit} no structured result exit=${outcome.exitCode} timeout=${outcome.timedOut}\n`,
-			);
-			await events.emit("visit.unstructured", {
-				questionId: outcome.challenge.questionId,
-				visit: outcome.visit,
-				exitCode: outcome.exitCode,
-				timedOut: outcome.timedOut,
-				elapsedMs: outcome.elapsedMs,
-			});
-			continue;
-		}
-		stateStore.mergeResult(outcome.challenge.questionId, result, outcome.elapsedMs);
-		await mergeHandoffFile(outcome.workspace, localState, result);
-		await events.emit("visit.completed", {
-			questionId: outcome.challenge.questionId,
-			visit: outcome.visit,
-			status: result.status,
-			elapsedMs: outcome.elapsedMs,
-			facts: result.facts.length,
-			artifacts: result.artifacts.length,
-			requestReset: result.request_reset,
+	try {
+		await events.emit("run.started", {
+			runId,
+			pid: process.pid,
+			preset: basePreset.name,
+			activeChallenges: basePreset.activeChallenges,
+			innerConcurrency: basePreset.innerConcurrency,
+			durationSeconds,
+			dryRun: options.dryRun === true,
 		});
+		process.stdout.write(
+			`[WQ] competition mode run=${runId} preset=${basePreset.name} active=${basePreset.activeChallenges} inner=${basePreset.innerConcurrency} duration=${durationSeconds}s dryRun=${options.dryRun === true}\n`,
+		);
 
-		if (result.request_reset && outcome.challenge.interactive && !resultGrounded(result, localState.rejectedFlags)) {
+		while (Date.now() < deadline) {
+			if (await stopRequested()) break;
 			try {
-				const reset = await platform.reset(outcome.challenge.questionId);
-				process.stdout.write(`[WQ] q=${outcome.challenge.questionId} controller reset=${reset}\n`);
-				await events.emit("challenge.reset", { questionId: outcome.challenge.questionId, reset });
+				lastRemote = await platform.listChallenges();
+				await events.emit("platform.polled", {
+					visible: lastRemote.length,
+					solved: lastRemote.filter(item => item.isSolved).length,
+				});
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				process.stderr.write(`[WQ] q=${outcome.challenge.questionId} reset failed: ${message}\n`);
-				await events.emit("challenge.reset_failed", { questionId: outcome.challenge.questionId, message });
+				process.stderr.write(`[WQ] platform poll failed: ${message}\n`);
+				await events.emit("platform.poll_failed", { message });
 			}
-		}
+			if (await stopRequested()) break;
 
-		if (result.status === "solved") {
-			if (!resultGrounded(result, localState.rejectedFlags)) {
-				process.stderr.write(`[WQ] q=${outcome.challenge.questionId} candidate rejected by deterministic grounding gate\n`);
-				if (result.flag) stateStore.rejectFlag(outcome.challenge.questionId, result.flag);
-				await events.emit("candidate.rejected", { questionId: outcome.challenge.questionId, reason: "grounding" });
-			} else if (options.dryRun) {
-				process.stdout.write(`[WQ] DRY-RUN q=${outcome.challenge.questionId} verified-candidate=${result.flag}\n`);
-				await events.emit("candidate.verified", { questionId: outcome.challenge.questionId, dryRun: true });
-			} else {
+			for (const challenge of lastRemote) {
+				if (challenge.isSolved) stateStore.markSolved(challenge.questionId);
+			}
+			await stateStore.save();
+
+			const remainingMs = deadline - Date.now();
+			const rescue = remainingMs <= 5 * 60_000;
+			const launchPreset: WqPresetName = rescue && basePreset.name !== "safe" ? "max" : basePreset.name;
+			const currentPreset = resolveWqPreset(launchPreset);
+			const candidates = lastRemote
+				.filter(challenge => scoped(challenge, options))
+				.filter(challenge => !challenge.isSolved && !stateStore.challenge(challenge.questionId).solved)
+				.filter(challenge => !active.has(challenge.questionId))
+				.filter(challenge => !options.maxVisits || stateStore.challenge(challenge.questionId).visits < options.maxVisits)
+				.sort(
+					(a, b) =>
+						challengePriority(b, stateStore.challenge(b.questionId), { rescue }) -
+						challengePriority(a, stateStore.challenge(a.questionId), { rescue }),
+				);
+
+			while (
+				active.size < currentPreset.activeChallenges &&
+				candidates.length > 0 &&
+				memoryHealthy(currentPreset.minFreeMemoryRatio)
+			) {
+				if (await stopRequested()) break;
+				const challenge = candidates.shift();
+				if (!challenge) break;
+				const workspace = path.join(workspaceRoot, safeComponent(challenge.questionId));
+				const localState = stateStore.challenge(challenge.questionId);
+				await writeChallengeContext(workspace, challenge, localState);
 				try {
-					await events.emit("submit.started", { questionId: outcome.challenge.questionId });
-					const submitted = await platform.submit(outcome.challenge.questionId, result.flag);
-					if (submitted.correct) {
-						stateStore.markSolved(outcome.challenge.questionId);
-						process.stdout.write(`[WQ] SOLVED q=${outcome.challenge.questionId} flag=${result.flag}\n`);
-						await events.emit("submit.accepted", { questionId: outcome.challenge.questionId });
-					} else {
-						stateStore.rejectFlag(outcome.challenge.questionId, result.flag);
-						const message = submitted.message || `status=${submitted.status}`;
-						process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit rejected: ${message}\n`);
-						await events.emit("submit.rejected", { questionId: outcome.challenge.questionId, message });
-					}
+					const attachment = await platform.downloadAttachment(challenge, workspace);
+					if (attachment) process.stdout.write(`[WQ] ${challenge.questionId} attachment=${path.basename(attachment)}\n`);
+				} catch (error) {
+					process.stderr.write(`[WQ] ${challenge.questionId} attachment failed: ${error instanceof Error ? error.message : String(error)}\n`);
+				}
+				if (await stopRequested()) break;
+				const visit = stateStore.markVisitStarted(challenge.questionId);
+				await stateStore.save();
+				await events.emit("challenge.started", {
+					questionId: challenge.questionId,
+					title: challenge.title,
+					category: challenge.category,
+					visit,
+					preset: launchPreset,
+					solvedNumber: challenge.solvedNumber,
+				});
+				process.stdout.write(
+					`[WQ] launch q=${challenge.questionId} cat=${challenge.category} visit=${visit} preset=${launchPreset} solvedBy=${challenge.solvedNumber}\n`,
+				);
+				const abort = new AbortController();
+				active.set(challenge.questionId, {
+					abort,
+					promise: runVisit(challenge, visit, workspace, logsDir, launchPreset, options, abort.signal),
+				});
+			}
+			if (phase === "stopping") break;
+
+			if (active.size === 0) {
+				const visibleScope = lastRemote.filter(challenge => scoped(challenge, options));
+				if (
+					visibleScope.length > 0 &&
+					visibleScope.every(challenge => challenge.isSolved || stateStore.challenge(challenge.questionId).solved)
+				) {
+					finishReason = "scope_solved";
+					process.stdout.write("[WQ] all visible in-scope challenges solved\n");
+					await events.emit("run.scope_solved", { visible: visibleScope.length, runId });
+					break;
+				}
+				await Bun.sleep(memoryHealthy(currentPreset.minFreeMemoryRatio) ? 1800 : 3500);
+				continue;
+			}
+
+			const completions = Array.from(active.entries(), async ([questionId, visit]) => ({
+				questionId,
+				outcome: await visit.promise,
+			}));
+			const completion = await Promise.race([...completions, Bun.sleep(1800).then(() => undefined)]);
+			if (!completion) continue;
+			active.delete(completion.questionId);
+			const { outcome } = completion;
+			const localState = stateStore.challenge(outcome.challenge.questionId);
+			const result = outcome.result;
+			if (!result) {
+				const event = outcome.aborted ? "visit.aborted" : "visit.unstructured";
+				process.stderr.write(
+					`[WQ] q=${outcome.challenge.questionId} visit=${outcome.visit} ${outcome.aborted ? "aborted" : "no structured result"} exit=${outcome.exitCode} timeout=${outcome.timedOut}\n`,
+				);
+				await events.emit(event, {
+					questionId: outcome.challenge.questionId,
+					visit: outcome.visit,
+					exitCode: outcome.exitCode,
+					timedOut: outcome.timedOut,
+					elapsedMs: outcome.elapsedMs,
+				});
+				continue;
+			}
+			stateStore.mergeResult(outcome.challenge.questionId, result, outcome.elapsedMs);
+			await mergeHandoffFile(outcome.workspace, localState, result);
+			await events.emit("visit.completed", {
+				questionId: outcome.challenge.questionId,
+				visit: outcome.visit,
+				status: result.status,
+				elapsedMs: outcome.elapsedMs,
+				facts: result.facts.length,
+				artifacts: result.artifacts.length,
+				requestReset: result.request_reset,
+			});
+
+			if (result.request_reset && outcome.challenge.interactive && !resultGrounded(result, localState.rejectedFlags)) {
+				try {
+					const reset = await platform.reset(outcome.challenge.questionId);
+					process.stdout.write(`[WQ] q=${outcome.challenge.questionId} controller reset=${reset}\n`);
+					await events.emit("challenge.reset", { questionId: outcome.challenge.questionId, reset });
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit error: ${message}\n`);
-					await events.emit("submit.error", { questionId: outcome.challenge.questionId, message });
+					process.stderr.write(`[WQ] q=${outcome.challenge.questionId} reset failed: ${message}\n`);
+					await events.emit("challenge.reset_failed", { questionId: outcome.challenge.questionId, message });
 				}
 			}
-		}
-		await stateStore.save();
-	}
 
-	if (active.size > 0) {
-		process.stdout.write(`[WQ] deadline reached; waiting briefly for ${active.size} active visit(s) to terminate by their own budgets\n`);
-		await Promise.allSettled(active.values());
+			if (result.status === "solved") {
+				if (!resultGrounded(result, localState.rejectedFlags)) {
+					process.stderr.write(`[WQ] q=${outcome.challenge.questionId} candidate rejected by deterministic grounding gate\n`);
+					if (result.flag) stateStore.rejectFlag(outcome.challenge.questionId, result.flag);
+					await events.emit("candidate.rejected", { questionId: outcome.challenge.questionId, reason: "grounding" });
+				} else if (options.dryRun) {
+					process.stdout.write(`[WQ] DRY-RUN q=${outcome.challenge.questionId} verified-candidate=${result.flag}\n`);
+					await events.emit("candidate.verified", { questionId: outcome.challenge.questionId, dryRun: true });
+				} else {
+					try {
+						await events.emit("submit.started", { questionId: outcome.challenge.questionId });
+						const submitted = await platform.submit(outcome.challenge.questionId, result.flag);
+						if (submitted.correct) {
+							stateStore.markSolved(outcome.challenge.questionId);
+							process.stdout.write(`[WQ] SOLVED q=${outcome.challenge.questionId} flag=${result.flag}\n`);
+							await events.emit("submit.accepted", { questionId: outcome.challenge.questionId });
+						} else {
+							stateStore.rejectFlag(outcome.challenge.questionId, result.flag);
+							const message = submitted.message || `status=${submitted.status}`;
+							process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit rejected: ${message}\n`);
+							await events.emit("submit.rejected", { questionId: outcome.challenge.questionId, message });
+						}
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						process.stderr.write(`[WQ] q=${outcome.challenge.questionId} submit error: ${message}\n`);
+						await events.emit("submit.error", { questionId: outcome.challenge.questionId, message });
+					}
+				}
+			}
+			await stateStore.save();
+		}
+
+		if (Date.now() >= deadline && finishReason === "deadline" && active.size > 0) {
+			process.stdout.write(`[WQ] deadline reached; aborting ${active.size} active visit(s)\n`);
+		}
+		await drainActive(finishReason);
+		await stateStore.save();
+		const solvedCount = Object.values(stateStore.state.challenges).filter(item => item.solved).length;
+		await events.emit("run.finished", {
+			runId,
+			reason: finishReason,
+			solved: solvedCount,
+			challenges: Object.keys(stateStore.state.challenges).length,
+		});
+		process.stdout.write(`[WQ] finished run=${runId} reason=${finishReason} solved=${solvedCount} state=${stateStore.file}\n`);
+	} catch (error) {
+		finishReason = "failed";
+		phase = "stopping";
+		abortActive();
+		await events.emit("run.failed", {
+			runId,
+			message: error instanceof Error ? error.message : String(error),
+		}).catch(() => {});
+		throw error;
+	} finally {
+		clearInterval(heartbeatTimer);
+		await drainActive(finishReason).catch(() => {});
+		await heartbeatWrite;
+		await fs.rm(heartbeatPath(runtimeRoot), { force: true }).catch(() => {});
+		await clearWqControl(runtimeRoot, runId);
+		await events.flush().catch(() => {});
 	}
-	await stateStore.save();
-	const solvedCount = Object.values(stateStore.state.challenges).filter(item => item.solved).length;
-	await events.emit("run.finished", { solved: solvedCount, challenges: Object.keys(stateStore.state.challenges).length });
-	await events.flush();
-	clearInterval(heartbeatTimer);
-	await heartbeatWrite;
-	await fs.rm(heartbeatFile, { force: true }).catch(() => {});
-	process.stdout.write(`[WQ] finished solved=${solvedCount} state=${stateStore.file}\n`);
 }
