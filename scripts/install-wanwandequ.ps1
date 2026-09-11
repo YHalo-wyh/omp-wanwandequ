@@ -1,9 +1,10 @@
 param(
-    [string]$Version = "latest",
+    [string]$Version = "wq-dev",
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\omp-wanwandequ"
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $Repo = "YHalo-wyh/omp-wanwandequ"
 
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
@@ -13,33 +14,35 @@ switch ($arch) {
     default  { throw "Unsupported Windows architecture: $arch" }
 }
 
-$headers = @{ "User-Agent" = "omp-wanwandequ-installer" }
-if ($Version -eq "latest") {
-    $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/latest"
-} else {
-    $tag = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }
-    $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag"
-}
-
-$asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-if (-not $asset) {
-    throw "Release $($release.tag_name) does not contain $assetName"
-}
+$base = "https://github.com/$Repo/releases/download/$Version"
+$assetUrl = "$base/$assetName"
+$checksumUrl = "$assetUrl.sha256"
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $destination = Join-Path $InstallDir "omp-wanwandequ.exe"
 $temp = "$destination.download"
-Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $temp
-Move-Item -Force $temp $destination
+$checksumTemp = "$temp.sha256"
+
+Write-Host "[WQ] downloading $Version ($arch) ..." -ForegroundColor Cyan
+try {
+    Invoke-WebRequest -Headers @{"User-Agent"="omp-wanwandequ-installer"} -Uri $assetUrl -OutFile $temp
+    Invoke-WebRequest -Headers @{"User-Agent"="omp-wanwandequ-installer"} -Uri $checksumUrl -OutFile $checksumTemp
+    $expected = ((Get-Content $checksumTemp -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+    $actual = (Get-FileHash -Algorithm SHA256 $temp).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) { throw "SHA256 mismatch: expected $expected, got $actual" }
+    Move-Item -Force $temp $destination
+} finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $temp, $checksumTemp
+}
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $parts = @($userPath -split ';' | Where-Object { $_ })
 if ($parts -notcontains $InstallDir) {
-    $newPath = (($parts + $InstallDir) -join ';')
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-    $env:Path = "$env:Path;$InstallDir"
-    Write-Host "Added $InstallDir to your user PATH."
+    [Environment]::SetEnvironmentVariable("Path", (($parts + $InstallDir) -join ';'), "User")
 }
+if (($env:Path -split ';') -notcontains $InstallDir) { $env:Path = "$env:Path;$InstallDir" }
 
-Write-Host "Installed omp-wanwandequ $($release.tag_name) -> $destination"
+New-Item -ItemType Directory -Force -Path (Join-Path $HOME ".omp-wanwandequ") | Out-Null
+Write-Host "[WQ] installed -> $destination" -ForegroundColor Green
+Write-Host "[WQ] configure inside the agent with /wq-key and /wq-token" -ForegroundColor Cyan
 & $destination doctor
