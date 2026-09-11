@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Wanwandequ Studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "cn.yhalo.wanwandequ.studio",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -27,8 +27,8 @@
     "active": true,
     "targets": ["nsis"],
     "externalBin": ["binaries/omp-wanwandequ"],
-    "shortDescription": "OMP-Wanwandequ 中文 CTF 智能工作台",
-    "longDescription": "面向 OMP-Wanwandequ 的桌面 CTF IDE：中文对话、可交互工作区、原生 PTY、比赛状态、上下文与工具调用观测，以及真实运行配置。",
+    "shortDescription": "Wanwandequ Runtime 的中文 CTF 客户端",
+    "longDescription": "面向 Wanwandequ Headless Runtime 的桌面客户端：通过 OMP 原生 JSONL RPC 连接 AgentSession，提供中文对话、工作区、比赛状态、真实工具与 Subagent 事件、上下文和运行配置；正式比赛仍由独立 headless Agent 执行。",
     "windows": {
       "nsis": {
         "installMode": "currentUser"
