@@ -6,11 +6,37 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { installWqAuditLogging } from "./wq/logging";
 
-// Wanwandequ is a separate installed agent, not an OMP profile. Keep its
-// credentials, models.yml, sessions and caches isolated from a normal `omp`
-// installation unless the operator explicitly chooses another config root.
-process.env.PI_CONFIG_DIR ||= process.env.WANWANDEQU_CONFIG_DIR || path.join(os.homedir(), ".omp-wanwandequ");
-process.env.OMP_CONFIG_DIR ||= process.env.PI_CONFIG_DIR;
+/**
+ * PI_CONFIG_DIR is an OMP config *directory name/path relative to home*, not an
+ * absolute config-root variable. Passing `C:\\Users\\...\\.omp-wanwandequ` on
+ * Windows makes the core resolver do `path.join(os.homedir(), PI_CONFIG_DIR)`
+ * and produces `C:\\Users\\...\\C:\\Users\\...\\.omp-wanwandequ`.
+ *
+ * Wanwandequ still exposes WANWANDEQU_CONFIG_DIR as an ergonomic config-root
+ * override. Convert it to the relative form expected by OMP. A config root on a
+ * different Windows drive cannot be represented by PI_CONFIG_DIR without
+ * changing OMP's global path contract, so fail early with a useful message
+ * instead of reaching storage initialization with a misleading ENOENT.
+ */
+function configureStandaloneRoot(): string {
+	const home = path.resolve(os.homedir());
+	const explicitPi = process.env.PI_CONFIG_DIR?.trim();
+	const explicitWq = process.env.WANWANDEQU_CONFIG_DIR?.trim();
+	const requested = explicitWq || explicitPi || path.join(home, ".omp-wanwandequ");
+	const absolute = path.isAbsolute(requested) ? path.normalize(requested) : path.resolve(home, requested);
+	const relative = path.relative(home, absolute) || ".";
+	if (path.isAbsolute(relative)) {
+		throw new Error(
+			`Wanwandequ config root must be representable relative to the current home directory (${home}); ` +
+				`cross-volume root is not supported by OMP PI_CONFIG_DIR: ${absolute}`,
+		);
+	}
+	process.env.PI_CONFIG_DIR = relative;
+	process.env.OMP_CONFIG_DIR ||= relative;
+	return absolute;
+}
+
+const standaloneConfigRoot = configureStandaloneRoot();
 
 /**
  * Load the standalone config-root .env before command routing. OMP itself also
@@ -41,7 +67,7 @@ function loadStandaloneEnv(configRoot: string): void {
 	}
 }
 
-loadStandaloneEnv(process.env.PI_CONFIG_DIR);
+loadStandaloneEnv(standaloneConfigRoot);
 
 const originalArgs = process.argv.slice(2);
 
@@ -101,7 +127,7 @@ function normalizeWanwanArgv(argv: string[]): string[] {
 	if (first === "wq") return argv;
 
 	// The public binary presents WQ actions directly:
-	//   omp-wanwandequ / chat / run / solve / bench / doctor / agents / presets
+	//   omp-wanwandequ / chat / runtime / run / solve / bench / doctor / agents / presets
 	return ["wq", ...argv];
 }
 
