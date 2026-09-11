@@ -23,8 +23,44 @@ export interface WqSolveOptions {
 	noSession?: boolean;
 }
 
+export interface WqChatOptions {
+	cwd?: string;
+	preset?: WqPresetName;
+	innerConcurrency?: number;
+	advisor?: boolean;
+	thinking?: string;
+}
+
 function mergeAppendPrompt(existing: string | undefined): string {
 	return existing?.trim() ? `${existing.trim()}\n\n${WQ_SYSTEM_PROMPT}` : WQ_SYSTEM_PROMPT;
+}
+
+function wqSessionFactory() {
+	return async (sessionOptions: CreateAgentSessionOptions | undefined) => {
+		const base = (sessionOptions ?? {}) as CreateAgentSessionOptions;
+		return createAgentSession({
+			...base,
+			appendSystemPrompt: mergeAppendPrompt(base.appendSystemPrompt),
+		});
+	};
+}
+
+/** Open the native OMP interactive TUI with Wanwandequ policy and skills loaded. */
+export async function runWqChat(options: WqChatOptions = {}): Promise<void> {
+	const cwd = path.resolve(options.cwd ?? process.cwd());
+	await materializeWqSkills(cwd);
+	const preset = resolveWqPreset(options.preset);
+	const settings = await Settings.init({
+		cwd,
+		overrides: wqRuntimeOverrides(preset, {
+			advisor: options.advisor,
+			innerConcurrency: options.innerConcurrency,
+		}),
+	});
+	const rawArgs: string[] = ["--cwd", cwd, "--auto-approve", "--model", wanwandequModelSelector()];
+	if (options.thinking) rawArgs.push("--thinking", options.thinking);
+	const parsed = parseArgs(rawArgs);
+	await runRootCommand(parsed, rawArgs, { settings, createAgentSession: wqSessionFactory() });
 }
 
 /** Run one challenge parent through the normal OMP runtime under WQ policy. */
@@ -73,14 +109,5 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 	rawArgs.push("--", prompt);
 	const parsed = parseArgs(rawArgs);
 
-	await runRootCommand(parsed, rawArgs, {
-		settings,
-		createAgentSession: async sessionOptions => {
-			const base = (sessionOptions ?? {}) as CreateAgentSessionOptions;
-			return createAgentSession({
-				...base,
-				appendSystemPrompt: mergeAppendPrompt(base.appendSystemPrompt),
-			});
-		},
-	});
+	await runRootCommand(parsed, rawArgs, { settings, createAgentSession: wqSessionFactory() });
 }
