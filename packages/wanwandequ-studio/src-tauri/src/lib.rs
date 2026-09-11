@@ -13,7 +13,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -42,7 +42,9 @@ struct StudioStatus {
     api_key: bool,
     team_token: bool,
     running: bool,
+    managed_here: bool,
     runtime_mode: String,
+    controller_run_id: Option<String>,
     workspace: String,
     agent_path: Option<String>,
     provider: String,
@@ -221,6 +223,50 @@ fn competition_log_file(cwd: &Path, name: &str) -> Result<File, String> {
         .map_err(|e| e.to_string())
 }
 
+fn now_ms() -> Result<u64, String> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    u64::try_from(duration.as_millis()).map_err(|e| e.to_string())
+}
+
+fn write_competition_control(cwd: &Path, run_id: &str, reason: &str) -> Result<(), String> {
+    let runtime = cwd.join(".wq");
+    fs::create_dir_all(&runtime).map_err(|e| e.to_string())?;
+    let file = runtime.join("control.json");
+    let temp = runtime.join(format!("control.{}.tmp", std::process::id()));
+    let payload = serde_json::json!({
+        "version": 1,
+        "runId": run_id,
+        "action": "stop",
+        "requestedAt": now_ms()?,
+        "reason": reason,
+    });
+    fs::write(&temp, format!("{}\n", payload)).map_err(|e| e.to_string())?;
+    if let Err(first) = fs::rename(&temp, &file) {
+        let _ = fs::remove_file(&file);
+        fs::rename(&temp, &file).map_err(|second| format!("写入比赛控制请求失败：{first}; retry: {second}"))?;
+    }
+    Ok(())
+}
+
+fn request_competition_stop(cwd: &Path, reason: &str) -> Result<String, String> {
+    let controller = dashboard::live_controller(cwd).ok_or_else(|| "该工作区没有存活的正式比赛控制器".to_string())?;
+    write_competition_control(cwd, &controller.run_id, reason)?;
+    audit(cwd, &format!("[studio] requested competition stop run={}", controller.run_id));
+    Ok(controller.run_id)
+}
+
+fn ensure_no_live_competition(cwd: &Path) -> Result<(), String> {
+    if let Some(controller) = dashboard::live_controller(cwd) {
+        return Err(format!(
+            "该工作区已有正式比赛控制器运行（run={}，phase={}），请先停止比赛",
+            controller.run_id, controller.phase
+        ));
+    }
+    Ok(())
+}
+
 fn terminate_child_tree(child: &mut Child) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -248,149 +294,181 @@ fn spawn_managed_process(
     mode_name: &str,
     structured_stdout: bool,
 ) -> Result<(), String> {
-    if state.running.load(Ordering::SeqCst) {
+    if state
+        .running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err("OMP Agent 已在运行".into());
     }
-    let cwd_path = validate_workspace(cwd)?;
-    let executable = find_agent(app)
-        .ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
 
-    let persistent_competition = mode_name == "competition";
-    let mut command = Command::new(executable);
-    command.current_dir(&cwd_path).args(args);
-    apply_wq_environment(&mut command);
+    let result = (|| -> Result<(), String> {
+        let cwd_path = validate_workspace(cwd)?;
+        let executable = find_agent(app)
+            .ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
 
-    if persistent_competition {
-        // Competition must not depend on Studio's WebView or pipe lifetime. If the
-        // GUI closes, these file-backed descriptors stay valid and the controller
-        // keeps solving until its own deadline.
-        let stdout = competition_log_file(&cwd_path, "competition-supervisor.stdout.log")?;
-        let stderr = competition_log_file(&cwd_path, "competition-supervisor.stderr.log")?;
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr));
-    } else {
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-    }
+        let persistent_competition = mode_name == "competition";
+        let mut command = Command::new(executable);
+        command.current_dir(&cwd_path).args(args);
+        apply_wq_environment(&mut command);
 
-    let mut child = command.spawn().map_err(|e| format!("启动 OMP Agent 失败：{e}"))?;
-    let stdin = if persistent_competition { None } else { child.stdin.take() };
-    let stdout = if persistent_competition { None } else { child.stdout.take() };
-    let stderr = if persistent_competition { None } else { child.stderr.take() };
-    let child = Arc::new(Mutex::new(child));
-
-    // Publish ownership before starting monitor threads so an unusually fast
-    // child exit cannot race with a late handle assignment.
-    {
-        let mut process = state.process.lock().map_err(|_| "进程锁异常")?;
-        *process = Some(AgentHandle {
-            child: child.clone(),
-            stdin,
-            mode: mode_name.to_string(),
-            cwd: cwd_path.clone(),
-        });
-    }
-    state.running.store(true, Ordering::SeqCst);
-    if let Ok(mut current_mode) = state.mode.lock() {
-        *current_mode = mode_name.to_string();
-    }
-
-    if let Some(stdout) = stdout {
-        let stdout_app = app.clone();
-        let stdout_mode = mode_name.to_string();
-        thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
-                if structured_stdout {
-                    if !line.trim().is_empty() {
-                        let _ = stdout_app.emit("runtime-frame", line);
-                    }
-                } else {
-                    let _ = stdout_app.emit("process-output", format!("{line}\n"));
-                }
-            }
-            let _ = stdout_app.emit("process-stream-closed", stdout_mode);
-        });
-    } else if persistent_competition {
-        let _ = app.emit(
-            "process-output",
-            format!(
-                "[Studio] 正式比赛已使用文件日志运行：{}\n",
-                cwd_path.join(".wq").join("logs").to_string_lossy()
-            ),
-        );
-    }
-
-    if let Some(stderr) = stderr {
-        let stderr_app = app.clone();
-        thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
-                let _ = stderr_app.emit("process-stderr", format!("{line}\n"));
-            }
-        });
-    }
-
-    let monitor_child = child.clone();
-    let monitor_app = app.clone();
-    let monitor_running = state.running.clone();
-    let monitor_mode_state = state.mode.clone();
-    let monitor_process_state = state.process.clone();
-    let monitor_mode = mode_name.to_string();
-    thread::spawn(move || loop {
-        let status = {
-            let mut guard = match monitor_child.lock() {
-                Ok(guard) => guard,
-                Err(_) => break,
-            };
-            guard.try_wait()
-        };
-        match status {
-            Ok(Some(exit)) => {
-                monitor_running.store(false, Ordering::SeqCst);
-                if let Ok(mut current_mode) = monitor_mode_state.lock() {
-                    current_mode.clear();
-                }
-                if let Ok(mut process) = monitor_process_state.lock() {
-                    if process.as_ref().is_some_and(|handle| handle.mode == monitor_mode) {
-                        process.take();
-                    }
-                }
-                let _ = monitor_app.emit(
-                    "agent-exited",
-                    ProcessExit {
-                        mode: monitor_mode,
-                        code: exit.code(),
-                    },
-                );
-                break;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(120)),
-            Err(_) => {
-                monitor_running.store(false, Ordering::SeqCst);
-                break;
-            }
+        if persistent_competition {
+            // The competition controller is a runtime service, not a WebView child
+            // transport. File-backed stdio lets it survive Studio restarts and the
+            // heartbeat/control files provide reattachment and graceful control.
+            let stdout = competition_log_file(&cwd_path, "competition-supervisor.stdout.log")?;
+            let stderr = competition_log_file(&cwd_path, "competition-supervisor.stderr.log")?;
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(stdout))
+                .stderr(Stdio::from(stderr));
+        } else {
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
         }
-    });
 
-    audit(&cwd_path, &format!("[studio] start mode={mode_name} args={args:?}"));
-    Ok(())
+        let mut child = command.spawn().map_err(|e| format!("启动 OMP Agent 失败：{e}"))?;
+        let stdin = if persistent_competition { None } else { child.stdin.take() };
+        let stdout = if persistent_competition { None } else { child.stdout.take() };
+        let stderr = if persistent_competition { None } else { child.stderr.take() };
+        let child = Arc::new(Mutex::new(child));
+
+        {
+            let mut process = state.process.lock().map_err(|_| "进程锁异常")?;
+            *process = Some(AgentHandle {
+                child: child.clone(),
+                stdin,
+                mode: mode_name.to_string(),
+                cwd: cwd_path.clone(),
+            });
+        }
+        if let Ok(mut current_mode) = state.mode.lock() {
+            *current_mode = mode_name.to_string();
+        }
+
+        if let Some(stdout) = stdout {
+            let stdout_app = app.clone();
+            let stdout_mode = mode_name.to_string();
+            thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    let Ok(line) = line else { break };
+                    if structured_stdout {
+                        if !line.trim().is_empty() {
+                            let _ = stdout_app.emit("runtime-frame", line);
+                        }
+                    } else {
+                        let _ = stdout_app.emit("process-output", format!("{line}\n"));
+                    }
+                }
+                let _ = stdout_app.emit("process-stream-closed", stdout_mode);
+            });
+        } else if persistent_competition {
+            let _ = app.emit(
+                "process-output",
+                format!(
+                    "[Studio] 正式比赛控制器使用文件日志运行：{}\n",
+                    cwd_path.join(".wq").join("logs").to_string_lossy()
+                ),
+            );
+        }
+
+        if let Some(stderr) = stderr {
+            let stderr_app = app.clone();
+            thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    let Ok(line) = line else { break };
+                    let _ = stderr_app.emit("process-stderr", format!("{line}\n"));
+                }
+            });
+        }
+
+        let monitor_child = child.clone();
+        let monitor_app = app.clone();
+        let monitor_running = state.running.clone();
+        let monitor_mode_state = state.mode.clone();
+        let monitor_process_state = state.process.clone();
+        let monitor_mode = mode_name.to_string();
+        thread::spawn(move || loop {
+            let status = {
+                let mut guard = match monitor_child.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => break,
+                };
+                guard.try_wait()
+            };
+            match status {
+                Ok(Some(exit)) => {
+                    monitor_running.store(false, Ordering::SeqCst);
+                    if let Ok(mut current_mode) = monitor_mode_state.lock() {
+                        current_mode.clear();
+                    }
+                    if let Ok(mut process) = monitor_process_state.lock() {
+                        if process.as_ref().is_some_and(|handle| handle.mode == monitor_mode) {
+                            process.take();
+                        }
+                    }
+                    let _ = monitor_app.emit(
+                        "agent-exited",
+                        ProcessExit {
+                            mode: monitor_mode,
+                            code: exit.code(),
+                        },
+                    );
+                    break;
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(120)),
+                Err(_) => {
+                    monitor_running.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
+        });
+
+        audit(&cwd_path, &format!("[studio] start mode={mode_name} args={args:?}"));
+        Ok(())
+    })();
+
+    if result.is_err() {
+        state.running.store(false, Ordering::SeqCst);
+        if let Ok(mut mode) = state.mode.lock() {
+            mode.clear();
+        }
+        if let Ok(mut process) = state.process.lock() {
+            process.take();
+        }
+    }
+    result
 }
 
 #[tauri::command]
 fn studio_status(app: AppHandle, state: State<StudioState>, workspace: Option<String>) -> StudioStatus {
+    let workspace = workspace.unwrap_or_default();
+    let managed_here = state.running.load(Ordering::SeqCst);
+    let managed_mode = state.mode.lock().map(|mode| mode.clone()).unwrap_or_default();
+    let controller = (!workspace.is_empty())
+        .then(|| dashboard::live_controller(Path::new(&workspace)))
+        .flatten();
+    let running = managed_here || controller.is_some();
+    let runtime_mode = if managed_here {
+        managed_mode
+    } else if controller.is_some() {
+        "competition".to_owned()
+    } else {
+        String::new()
+    };
+
     StudioStatus {
         api_key: read_env_value("DEEPSEEK_API_KEY").is_some(),
         team_token: read_env_value("WQ_TEAM_TOKEN").is_some(),
-        running: state.running.load(Ordering::SeqCst),
-        runtime_mode: state.mode.lock().map(|mode| mode.clone()).unwrap_or_default(),
-        workspace: workspace.unwrap_or_default(),
+        running,
+        managed_here,
+        runtime_mode,
+        controller_run_id: controller.map(|item| item.run_id),
+        workspace,
         agent_path: find_agent(&app).map(|path| path.to_string_lossy().into_owned()),
         provider: configured_or("WANWANDEQU_PROVIDER", "deepseek"),
         preset: configured_or("WANWANDEQU_PRESET", "turbo"),
@@ -541,6 +619,8 @@ fn save_setting(kind: String, value: String) -> Result<(), String> {
 
 #[tauri::command]
 fn start_runtime(app: AppHandle, state: State<StudioState>, cwd: String) -> Result<(), String> {
+    let cwd_path = validate_workspace(&cwd)?;
+    ensure_no_live_competition(&cwd_path)?;
     spawn_managed_process(&app, &state, &cwd, &["runtime".to_string()], "runtime", true)
 }
 
@@ -562,17 +642,42 @@ fn start_headless(
     if label != expected_label {
         return Err("Headless 任务标签与实际命令不一致".into());
     }
-    if action == "run" && dashboard::read_dashboard(Path::new(&cwd)).running {
-        return Err("该工作区已有存活的正式比赛控制器，拒绝重复启动".into());
+    let cwd_path = validate_workspace(&cwd)?;
+    if let Some(controller) = dashboard::live_controller(&cwd_path) {
+        return Err(format!(
+            "该工作区已有存活的正式比赛控制器（run={}，phase={}），拒绝重复或并行启动 Agent",
+            controller.run_id, controller.phase
+        ));
     }
     spawn_managed_process(&app, &state, &cwd, &args, expected_label, false)
+}
+
+fn studio_rpc_command_allowed(command: &str) -> bool {
+    matches!(
+        command,
+        "negotiate_protocol"
+            | "prompt"
+            | "steer"
+            | "follow_up"
+            | "abort"
+            | "get_state"
+            | "get_last_assistant_text"
+            | "set_subagent_subscription"
+            | "get_subagents"
+            | "get_subagent_messages"
+            | "extension_ui_response"
+    )
 }
 
 #[tauri::command]
 fn runtime_command(state: State<StudioState>, frame: String) -> Result<(), String> {
     let parsed: serde_json::Value = serde_json::from_str(&frame).map_err(|e| format!("RPC 命令不是合法 JSON：{e}"))?;
-    if !parsed.is_object() {
-        return Err("RPC 命令必须是 JSON 对象".into());
+    let command = parsed
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "RPC 命令必须包含字符串 type".to_string())?;
+    if !studio_rpc_command_allowed(command) {
+        return Err(format!("Studio 不允许向 Runtime 发送高权限 RPC：{command}"));
     }
     let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
     let handle = guard.as_mut().ok_or_else(|| "Wanwandequ Runtime 当前没有运行".to_string())?;
@@ -586,20 +691,33 @@ fn runtime_command(state: State<StudioState>, frame: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn stop_agent(state: State<StudioState>) -> Result<(), String> {
+fn stop_agent(state: State<StudioState>, cwd: Option<String>) -> Result<(), String> {
     let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
-    if let Some(handle) = guard.take() {
-        let mode = handle.mode.clone();
-        let cwd = handle.cwd.clone();
-        let mut child = handle.child.lock().map_err(|_| "子进程锁异常")?;
-        terminate_child_tree(&mut child)?;
-        if mode == "competition" {
-            let _ = fs::remove_file(cwd.join(".wq").join("heartbeat.json"));
+    if let Some(handle) = guard.as_ref() {
+        if handle.mode == "competition" {
+            let workspace = handle.cwd.clone();
+            drop(guard);
+            request_competition_stop(&workspace, "Studio requested graceful stop")?;
+            return Ok(());
         }
     }
-    state.running.store(false, Ordering::SeqCst);
-    if let Ok(mut mode) = state.mode.lock() {
-        mode.clear();
+
+    if let Some(handle) = guard.take() {
+        let mut child = handle.child.lock().map_err(|_| "子进程锁异常")?;
+        terminate_child_tree(&mut child)?;
+        state.running.store(false, Ordering::SeqCst);
+        if let Ok(mut mode) = state.mode.lock() {
+            mode.clear();
+        }
+        return Ok(());
+    }
+    drop(guard);
+
+    if let Some(cwd) = cwd.filter(|value| !value.trim().is_empty()) {
+        let workspace = validate_workspace(&cwd)?;
+        if dashboard::live_controller(&workspace).is_some() {
+            request_competition_stop(&workspace, "Studio reattached and requested graceful stop")?;
+        }
     }
     Ok(())
 }
@@ -607,6 +725,7 @@ fn stop_agent(state: State<StudioState>) -> Result<(), String> {
 #[tauri::command]
 fn open_debug_tui(app: AppHandle, cwd: String) -> Result<(), String> {
     let cwd_path = validate_workspace(&cwd)?;
+    ensure_no_live_competition(&cwd_path)?;
     let executable = find_agent(&app)
         .ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
 
