@@ -125,6 +125,10 @@ export const usageHelp = {
 	description: "Show provider usage limits for every authenticated account",
 } satisfies CommandMetadata;
 
+export const wqHelp = {
+	description: "Run Wanwandequ autonomous CTF competition mode, local benchmarks, and diagnostics",
+} satisfies CommandMetadata;
+
 export const worktreeHelp = {
 	description: "Add, list, or clear git worktrees (clone-first when enabled)",
 } satisfies CommandMetadata;
