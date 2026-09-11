@@ -63,6 +63,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/bun-install
+      - name: Stage matching Windows native addon
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/natives/package.json').version")"
+          package="@oh-my-pi/pi-natives-win32-x64@${version}"
+          tarball="$(npm view "$package" dist.tarball)"
+          echo "Fetching $package from $tarball"
+          rm -rf "$RUNNER_TEMP/wq-win-native"
+          mkdir -p "$RUNNER_TEMP/wq-win-native" packages/natives/native
+          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP/wq-win-native"
+          cp "$RUNNER_TEMP"/wq-win-native/package/pi_natives.win32-x64*.node packages/natives/native/
+          test -f packages/natives/native/pi_natives.win32-x64-baseline.node
+          ls -lh packages/natives/native/pi_natives.win32-x64*.node
       - name: Build omp-wanwandequ Windows x64
         run: bun scripts/ci-release-build-wanwandequ.ts --targets win32-x64
       - name: Upload competition binary
