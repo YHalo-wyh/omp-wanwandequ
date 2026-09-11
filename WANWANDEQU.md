@@ -4,6 +4,8 @@
 
 The fork is maintained only in `YHalo-wyh/omp-wanwandequ`; Wanwandequ development does not push branches or pull requests to the upstream OMP repository.
 
+Wanwandequ is terminal-only. There is no desktop/WebView GUI: interactive work uses the native OMP TUI, while unattended competition uses the headless controller and its persistent state/log files.
+
 ## Install like normal OMP
 
 ### macOS / Linux / WSL
