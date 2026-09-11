@@ -44,7 +44,7 @@ At the very end of the turn, emit exactly one machine-readable result block:
 <WQ_RESULT>
 {"status":"solved|partial|blocked","flag":"","evidence":[],"facts":[],"rejected":[],"artifacts":[],"handoff":"","request_reset":false}
 </WQ_RESULT>
-When status=solved, flag MUST be exact and verifier-approved. When not solved, flag MUST be empty. Do not put a second WQ_RESULT block anywhere else.
+When status=solved, flag MUST be exact and verifier-approved. At least one `evidence` entry MUST contain the exact literal flag plus a concise source such as the command/script/artifact that produced it; this is a deterministic submit gate, so paraphrases or "verified above" are insufficient. When not solved, flag MUST be empty. Do not put a second WQ_RESULT block anywhere else.
 `;
 
 export interface WqResult {
