@@ -78,7 +78,7 @@ jobs:
           $env:DEEPSEEK_API_KEY = "ci-smoke-placeholder"
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = $exe
-          $psi.ArgumentList.Add("runtime")
+          $psi.Arguments = "runtime"
           $psi.UseShellExecute = $false
           $psi.RedirectStandardInput = $true
           $psi.RedirectStandardOutput = $true
@@ -88,7 +88,7 @@ jobs:
           if (-not $process.Start()) { throw "failed to start runtime" }
           try {
             $readyTask = $process.StandardOutput.ReadLineAsync()
-            if (-not $readyTask.Wait(20000)) { throw "runtime ready frame timed out: $($process.StandardError.ReadToEnd())" }
+            if (-not $readyTask.Wait(20000)) { throw "runtime ready frame timed out" }
             $ready = $readyTask.Result
             if ($ready -notmatch '"type":"ready"') { throw "unexpected first runtime frame: $ready" }
             $process.StandardInput.WriteLine('{"id":"ci-state","type":"get_state"}')
@@ -98,7 +98,7 @@ jobs:
             $state = $stateTask.Result
             if ($state -notmatch '"command":"get_state"' -or $state -notmatch '"success":true') { throw "unexpected get_state response: $state" }
           } finally {
-            if (-not $process.HasExited) { $process.Kill($true) }
+            if (-not $process.HasExited) { $process.Kill() }
           }
       - name: Check Studio Rust backend
         shell: powershell
