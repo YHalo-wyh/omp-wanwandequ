@@ -17,7 +17,6 @@ on:
       - "packages/coding-agent/test/wq-*.test.ts"
       - "scripts/ci-release-build-wanwandequ.ts"
       - "scripts/install-wanwandequ.*"
-      - "scripts/install-and-run-wanwandequ.ps1"
       - "installer/**"
       - "WANWANDEQU.md"
       - ".github/workflows/wq-ci.yml"
@@ -35,7 +34,6 @@ on:
       - "packages/coding-agent/test/wq-*.test.ts"
       - "scripts/ci-release-build-wanwandequ.ts"
       - "scripts/install-wanwandequ.*"
-      - "scripts/install-and-run-wanwandequ.ps1"
       - "installer/**"
       - "WANWANDEQU.md"
       - ".github/workflows/wq-ci.yml"
@@ -59,90 +57,74 @@ jobs:
         run: bun --cwd=packages/coding-agent run check:types
       - name: Run WQ focused tests
         run: bun test packages/coding-agent/test/wq-*.test.ts
-      - name: Verify branded release build plan
-        run: bun scripts/ci-release-build-wanwandequ.ts --dry-run --targets linux-x64,win32-x64
+      - name: Verify all release targets
+        run: bun scripts/ci-release-build-wanwandequ.ts --dry-run --targets linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64,win32-arm64
 
-  windows_binary:
-    name: Build Windows x64 competition binary
+  binaries:
+    name: Build ${{ matrix.id }} binary
     needs: validate
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            asset: omp-wanwandequ-linux-x64
+          - id: linux-arm64
+            asset: omp-wanwandequ-linux-arm64
+          - id: darwin-x64
+            asset: omp-wanwandequ-darwin-x64
+          - id: darwin-arm64
+            asset: omp-wanwandequ-darwin-arm64
+          - id: win32-x64
+            asset: omp-wanwandequ-windows-x64.exe
+          - id: win32-arm64
+            asset: omp-wanwandequ-windows-arm64.exe
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/bun-install
-      - name: Stage matching Windows native addon
+      - name: Stage matching native addon
         shell: bash
+        env:
+          TARGET_ID: ${{ matrix.id }}
         run: |
           set -euo pipefail
           version="$(node -p "require('./packages/natives/package.json').version")"
-          package="@oh-my-pi/pi-natives-win32-x64@${version}"
+          package="@oh-my-pi/pi-natives-${TARGET_ID}@${version}"
           tarball="$(npm view "$package" dist.tarball)"
           echo "Fetching $package from $tarball"
-          rm -rf "$RUNNER_TEMP/wq-win-native"
-          mkdir -p "$RUNNER_TEMP/wq-win-native" packages/natives/native
-          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP/wq-win-native"
-          cp "$RUNNER_TEMP"/wq-win-native/package/pi_natives.win32-x64*.node packages/natives/native/
-          test -f packages/natives/native/pi_natives.win32-x64-baseline.node
-      - name: Build Windows x64
-        run: bun scripts/ci-release-build-wanwandequ.ts --targets win32-x64
+          rm -rf "$RUNNER_TEMP/wq-native"
+          mkdir -p "$RUNNER_TEMP/wq-native" packages/natives/native
+          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP/wq-native"
+          cp "$RUNNER_TEMP"/wq-native/package/pi_natives.${TARGET_ID}*.node packages/natives/native/
+          compgen -G "packages/natives/native/pi_natives.${TARGET_ID}*.node" >/dev/null
+      - name: Build target
+        run: bun scripts/ci-release-build-wanwandequ.ts --targets ${{ matrix.id }}
       - name: Generate checksum
         shell: bash
+        env:
+          ASSET: ${{ matrix.asset }}
         run: |
           cd packages/coding-agent/binaries
-          sha256sum omp-wanwandequ-windows-x64.exe > omp-wanwandequ-windows-x64.exe.sha256
+          sha256sum "$ASSET" > "$ASSET.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: omp-wanwandequ-windows-x64
+          name: wq-bin-${{ matrix.id }}
           path: |
-            packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe
-            packages/coding-agent/binaries/omp-wanwandequ-windows-x64.exe.sha256
-          if-no-files-found: error
-          retention-days: 7
-
-  linux_binary:
-    name: Build Linux x64 competition binary
-    needs: validate
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/bun-install
-      - name: Stage matching Linux native addons
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./packages/natives/package.json').version")"
-          package="@oh-my-pi/pi-natives-linux-x64@${version}"
-          tarball="$(npm view "$package" dist.tarball)"
-          echo "Fetching $package from $tarball"
-          rm -rf "$RUNNER_TEMP/wq-linux-native"
-          mkdir -p "$RUNNER_TEMP/wq-linux-native" packages/natives/native
-          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP/wq-linux-native"
-          cp "$RUNNER_TEMP"/wq-linux-native/package/pi_natives.linux-x64*.node packages/natives/native/
-          test -f packages/natives/native/pi_natives.linux-x64-baseline.node
-      - name: Build Linux x64
-        run: bun scripts/ci-release-build-wanwandequ.ts --targets linux-x64
-      - name: Generate checksum
-        shell: bash
-        run: |
-          cd packages/coding-agent/binaries
-          sha256sum omp-wanwandequ-linux-x64 > omp-wanwandequ-linux-x64.sha256
-      - uses: actions/upload-artifact@v4
-        with:
-          name: omp-wanwandequ-linux-x64
-          path: |
-            packages/coding-agent/binaries/omp-wanwandequ-linux-x64
-            packages/coding-agent/binaries/omp-wanwandequ-linux-x64.sha256
+            packages/coding-agent/binaries/${{ matrix.asset }}
+            packages/coding-agent/binaries/${{ matrix.asset }}.sha256
           if-no-files-found: error
           retention-days: 7
 
   windows_installer:
     name: Build click-to-install Windows setup
-    needs: windows_binary
+    needs: binaries
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: omp-wanwandequ-windows-x64
+          name: wq-bin-win32-x64
           path: dist-bin
       - name: Install Inno Setup
         shell: powershell
@@ -160,68 +142,27 @@ jobs:
             Set-Content installer\dist\OMP-Wanwandequ-Setup-Windows-x64.exe.sha256 -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: omp-wanwandequ-windows-installer
+          name: wq-installer-windows-x64
           path: |
             installer/dist/OMP-Wanwandequ-Setup-Windows-x64.exe
             installer/dist/OMP-Wanwandequ-Setup-Windows-x64.exe.sha256
           if-no-files-found: error
           retention-days: 7
 
-  wsl_installer:
-    name: Build click-to-install WSL setup
-    needs: linux_binary
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: omp-wanwandequ-linux-x64
-          path: dist-bin
-      - name: Install Inno Setup
-        shell: powershell
-        run: choco install innosetup --no-progress -y
-      - name: Build WSL installer
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force installer\dist | Out-Null
-          $bin = (Resolve-Path 'dist-bin\omp-wanwandequ-linux-x64').Path
-          $bridge = (Resolve-Path 'installer\install-wsl.ps1').Path
-          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
-          & $iscc "/DLinuxBinary=$bin" "/DWslBridge=$bridge" 'installer\wsl.iss'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-FileHash installer\dist\OMP-Wanwandequ-Setup-WSL-x64.exe -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  OMP-Wanwandequ-Setup-WSL-x64.exe" } |
-            Set-Content installer\dist\OMP-Wanwandequ-Setup-WSL-x64.exe.sha256 -Encoding ascii
-      - uses: actions/upload-artifact@v4
-        with:
-          name: omp-wanwandequ-wsl-installer
-          path: |
-            installer/dist/OMP-Wanwandequ-Setup-WSL-x64.exe
-            installer/dist/OMP-Wanwandequ-Setup-WSL-x64.exe.sha256
-          if-no-files-found: error
-          retention-days: 7
-
   release:
     name: Publish rolling wq-dev release
     if: github.event_name == 'push' && github.ref == 'refs/heads/wq/competition-v1'
-    needs: [windows_binary, linux_binary, windows_installer, wsl_installer]
+    needs: [binaries, windows_installer]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: omp-wanwandequ-windows-x64
+          pattern: wq-bin-*
           path: dist
+          merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
-          name: omp-wanwandequ-linux-x64
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: omp-wanwandequ-windows-installer
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: omp-wanwandequ-wsl-installer
+          name: wq-installer-windows-x64
           path: dist
       - name: Publish rolling release
         env:
@@ -235,5 +176,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "OMP-Wanwandequ rolling dev" \
-            --notes "Rolling Windows/Linux x64 competition build from $GITHUB_SHA. Includes one-click Windows and WSL installers. Model locked to DeepSeek V4 Flash. Bare launch enters test chat until WQ_TEAM_TOKEN is configured; once configured, bare launch is unattended competition mode." \
+            --notes "Standalone OMP-Wanwandequ build from $GITHUB_SHA for Windows, macOS and Linux (x64/arm64). Windows also has a click-to-install setup EXE. Model locked to DeepSeek V4 Flash. Configure credentials inside the agent with /wq-key and /wq-token." \
             --prerelease
