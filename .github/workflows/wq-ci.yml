@@ -151,7 +151,7 @@ jobs:
 
   release:
     name: Publish rolling wq-dev release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/wq/competition-v1'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [binaries, windows_installer]
     runs-on: ubuntu-22.04
     steps:
@@ -176,5 +176,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "OMP-Wanwandequ rolling dev" \
-            --notes "Standalone OMP-Wanwandequ build from $GITHUB_SHA for Windows, macOS and Linux (x64/arm64). Windows also has a click-to-install setup EXE. Model locked to DeepSeek V4 Flash. Configure credentials inside the agent with /wq-key and /wq-token." \
+            --notes "Standalone OMP-Wanwandequ build from $GITHUB_SHA for Windows, macOS and Linux (x64/arm64). Windows also has a click-to-install setup EXE. Direct Windows double-click relaunches into a persistent PowerShell terminal so startup errors remain visible. Model locked to DeepSeek V4 Flash. Configure credentials inside the agent with /wq-key and /wq-token." \
             --prerelease
