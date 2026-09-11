@@ -36,7 +36,8 @@ jobs:
           $dir = "packages/wanwandequ-studio/src-tauri/binaries"
           New-Item -ItemType Directory -Force $dir | Out-Null
           $url = "https://github.com/YHalo-wyh/omp-wanwandequ/releases/download/wq-dev/omp-wanwandequ-windows-x64.exe"
-          Invoke-WebRequest -Uri $url -OutFile "$dir/omp-wanwandequ-x86_64-pc-windows-msvc.exe"
+          & curl.exe -fL --retry 4 --retry-delay 2 --connect-timeout 20 -o "$dir/omp-wanwandequ-x86_64-pc-windows-msvc.exe" $url
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Studio installer
         shell: powershell
         run: bun --cwd packages/wanwandequ-studio run studio:build
