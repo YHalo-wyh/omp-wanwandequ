@@ -31,8 +31,8 @@ export function skillForCategory(category: string | undefined): string | undefin
 	if (/\b(web|web security|web pentest|web penetration)\b/.test(normalized)) return "wanwandequ-web";
 	if (/\b(crypto|cryptography|cipher)\b/.test(normalized)) return "wanwandequ-crypto";
 	if (/\b(forensic|forensics|misc|stego|memory)\b/.test(normalized)) return "wanwandequ-forensics";
-	if (/\b(protocol|network protocol|协议)\b/.test(normalized)) return "wanwandequ-protocol";
-	if (/\b(incident|response|log|应急|日志)\b/.test(normalized)) return "wanwandequ-incident";
+	if (/\b(protocol|network protocol)\b/.test(normalized) || /协议/.test(normalized)) return "wanwandequ-protocol";
+	if (/\b(incident|response|log)\b/.test(normalized) || /应急|日志/.test(normalized)) return "wanwandequ-incident";
 	return undefined;
 }
 
