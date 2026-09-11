@@ -47,19 +47,23 @@ if ($parts -notcontains $InstallDir) {
 }
 if (($env:Path -split ';') -notcontains $InstallDir) { $env:Path = "$env:Path;$InstallDir" }
 
-# Seed the standalone config from an existing OMP install on first setup only.
-# This is a copy, never a symlink: subsequent Wanwandequ changes cannot mutate normal OMP.
+# Seed only settings/model/auth files from an existing OMP install on first setup.
+# We deliberately do NOT copy session DBs, logs, workspaces, agents, or caches.
 $normalOmp = Join-Path $HOME ".omp"
 $wanwanConfig = Join-Path $HOME ".omp-wanwandequ"
 if (-not $SkipConfigImport -and (Test-Path $normalOmp) -and -not (Test-Path $wanwanConfig)) {
-    Write-Host "[WQ] seeding standalone config from $normalOmp (read-only source)..." -ForegroundColor DarkGray
+    Write-Host "[WQ] importing reusable OMP config/auth files (source remains untouched)..." -ForegroundColor DarkGray
     New-Item -ItemType Directory -Force -Path $wanwanConfig | Out-Null
-    $copyNames = @("config.yml", "config.yaml", "models.yml", "models.yaml", "auth.json", "agent")
-    foreach ($name in $copyNames) {
-        $src = Join-Path $normalOmp $name
-        if (Test-Path $src) {
-            $dst = Join-Path $wanwanConfig $name
-            Copy-Item -Force -Recurse $src $dst
+    $relativeCandidates = @(
+        "config.yml", "config.yaml", "models.yml", "models.yaml", "auth.json", "auth.jsonc", "credentials.json",
+        "agent\config.yml", "agent\config.yaml", "agent\models.yml", "agent\models.yaml", "agent\auth.json", "agent\auth.jsonc", "agent\credentials.json"
+    )
+    foreach ($relative in $relativeCandidates) {
+        $src = Join-Path $normalOmp $relative
+        if (Test-Path $src -PathType Leaf) {
+            $dst = Join-Path $wanwanConfig $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+            Copy-Item -Force $src $dst
         }
     }
 }
