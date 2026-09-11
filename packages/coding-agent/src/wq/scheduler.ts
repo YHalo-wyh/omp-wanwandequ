@@ -335,7 +335,7 @@ export async function runWqCompetition(options: WqRunOptions): Promise<void> {
 					promise: runVisit(challenge, visit, workspace, logsDir, launchPreset, options, abort.signal),
 				});
 			}
-			if (phase === "stopping") break;
+			if (await stopRequested()) break;
 
 			if (active.size === 0) {
 				const visibleScope = lastRemote.filter(challenge => scoped(challenge, options));
