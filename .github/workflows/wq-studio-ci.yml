@@ -38,10 +38,11 @@ jobs:
       - name: Type check Wanwandequ runtime
         shell: powershell
         run: bun --cwd=packages/coding-agent run check:types
-      - name: Test WQ observer and Studio RPC adapter
+      - name: Test WQ controller, observer and Studio RPC adapter
         shell: powershell
         run: |
           bun test packages/coding-agent/test/wq-events.test.ts
+          bun test packages/coding-agent/test/wq-controller-state.test.ts
           bun test packages/wanwandequ-studio/src/runtime-protocol.test.ts
       - name: Build Studio frontend
         shell: powershell
