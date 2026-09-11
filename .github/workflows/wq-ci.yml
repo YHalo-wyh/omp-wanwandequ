@@ -1,0 +1,54 @@
+name: WQ Competition CI
+
+on:
+  push:
+    branches:
+      - main
+      - "wq/**"
+    paths:
+      - "packages/coding-agent/src/wq/**"
+      - "packages/coding-agent/src/prompts/agents/wq-*.md"
+      - "packages/coding-agent/src/task/agents.ts"
+      - "packages/coding-agent/src/commands/wq.ts"
+      - "packages/coding-agent/src/cli-commands.ts"
+      - "packages/coding-agent/src/cli/command-help.ts"
+      - "packages/coding-agent/test/wq-*.test.ts"
+      - ".github/workflows/wq-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/coding-agent/src/wq/**"
+      - "packages/coding-agent/src/prompts/agents/wq-*.md"
+      - "packages/coding-agent/src/task/agents.ts"
+      - "packages/coding-agent/src/commands/wq.ts"
+      - "packages/coding-agent/src/cli-commands.ts"
+      - "packages/coding-agent/src/cli/command-help.ts"
+      - "packages/coding-agent/test/wq-*.test.ts"
+      - ".github/workflows/wq-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wq-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: WQ typecheck and tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bun-install
+      - name: Type check coding agent
+        run: bun --cwd=packages/coding-agent run check:types
+      - name: Run WQ focused tests
+        run: bun test packages/coding-agent/test/wq-*.test.ts
+      - name: Verify CLI routing and embedded agents without a model call
+        run: |
+          bun packages/coding-agent/src/cli.ts wq doctor --preset turbo
+          bun packages/coding-agent/src/cli.ts wq agents
+          bun packages/coding-agent/src/cli.ts wq presets
+      - name: Verify release build plan
+        run: bun scripts/ci-release-build-binaries.ts --dry-run --targets linux-x64,win32-x64
