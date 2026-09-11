@@ -3,7 +3,7 @@ name: Wanwandequ Studio CI
 on:
   push:
     branches:
-      - "wq/studio-v1"
+      - "wq/studio-*"
       - main
     paths:
       - "packages/wanwandequ-studio/**"
@@ -74,7 +74,7 @@ jobs:
 
   release:
     name: Publish studio-dev
-    if: github.event_name == 'push' && github.ref == 'refs/heads/wq/studio-v1'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/wq/studio-')
     needs: windows
     runs-on: ubuntu-22.04
     steps:
@@ -92,5 +92,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Wanwandequ Studio rolling dev" \
-            --notes "Wanwandequ Studio v0.2: desktop CTF IDE shell with real PTY terminal, persistent state/event dashboard, workspace browser, credential controls, explicit TEST/ARMED launch paths, and audit-friendly logs." \
+            --notes "Wanwandequ Studio v0.3: full Chinese IDE UI, real clickable workspace explorer, PTY-backed conversation composer, native terminal fallback, tool/context observer panels, and direct Wanwandequ API/token/provider/preset configuration without changing the OMP Agent execution chain." \
             --prerelease
