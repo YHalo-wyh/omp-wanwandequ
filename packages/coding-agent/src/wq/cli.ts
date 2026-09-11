@@ -7,7 +7,7 @@ import { runWqBench } from "./bench";
 import { wanwandequModelSelector, wanwandequProvider, WANWANDEQU_MODEL_ID } from "./model";
 import { listWqPresets, resolveWqPreset, wqRuntimeOverrides, type WqPresetName } from "./preset";
 import { runWqCompetition } from "./scheduler";
-import { runWqChat, runWqSolve } from "./solve";
+import { runWqChat, runWqRuntime, runWqSolve } from "./solve";
 
 const DEFAULT_QUERY_URL = "https://apiterminator.ichunqiu.com/04cb510e425bd8f64fa97ba66f3935e1";
 const DEFAULT_RESET_URL = "https://apiterminator.ichunqiu.com/deed3dba39e57b7cf95ea63ddd84e0c8";
@@ -62,13 +62,15 @@ function printHelp(): void {
 	process.stdout.write(`Autonomous Bay Area Cup CTF agent; model locked to ${WANWANDEQU_MODEL_ID}.\n\n`);
 	process.stdout.write(`Usage:\n`);
 	process.stdout.write(`  omp-wanwandequ                         # chat if no team token; otherwise start unattended competition\n`);
-	process.stdout.write(`  omp-wanwandequ chat [--preset turbo]  # force interactive test/TUI even when a team token is configured\n`);
+	process.stdout.write(`  omp-wanwandequ chat [--preset turbo]  # native interactive OMP TUI\n`);
+	process.stdout.write(`  omp-wanwandequ runtime [--preset turbo] # headless JSONL RPC runtime for Studio/embedders\n`);
 	process.stdout.write(`  omp-wanwandequ doctor [--preset turbo]\n`);
 	process.stdout.write(`  omp-wanwandequ agents\n`);
 	process.stdout.write(`  omp-wanwandequ presets\n`);
 	process.stdout.write(`  omp-wanwandequ solve <path> [--objective TEXT] [--category pwn] [--preset turbo] [--inner N] [--advisor] [--thinking LEVEL]\n`);
 	process.stdout.write(`  omp-wanwandequ bench <path> [--repeat 3] [--expect flag{...}] [--inner 2|4|6] [--advisor] [--preset turbo]\n`);
 	process.stdout.write(`  omp-wanwandequ run [--duration 1800] [--preset turbo] [--dry-run] [--root DIR] [--categories pwn,reverse] [--questions 1,2]\n\n`);
+	process.stdout.write(`runtime uses OMP's native RPC protocol on stdin/stdout; it does not emulate or scrape the TUI.\n`);
 	process.stdout.write(`All console output is mirrored to ./logs in the launch working directory.\n`);
 	process.stdout.write(`Setting WQ_TEAM_TOKEN arms no-argument unattended competition mode. Organizer gateway provider may be selected only with WANWANDEQU_PROVIDER; the model id remains ${WANWANDEQU_MODEL_ID}.\n`);
 }
@@ -105,6 +107,17 @@ async function doctor(argv: string[]): Promise<void> {
 async function chat(argv: string[]): Promise<void> {
 	rejectModelOverride(argv);
 	await runWqChat({
+		cwd: value(argv, "--cwd") ?? process.cwd(),
+		preset: presetName(argv),
+		innerConcurrency: numberFlag(argv, "--inner"),
+		advisor: flag(argv, "--advisor"),
+		thinking: thinkingLevel(argv),
+	});
+}
+
+async function runtime(argv: string[]): Promise<void> {
+	rejectModelOverride(argv);
+	await runWqRuntime({
 		cwd: value(argv, "--cwd") ?? process.cwd(),
 		preset: presetName(argv),
 		innerConcurrency: numberFlag(argv, "--inner"),
@@ -198,6 +211,10 @@ export async function runWqCommand(argv: string[]): Promise<void> {
 			return;
 		case "chat":
 			await chat(argv);
+			return;
+		case "runtime":
+		case "rpc":
+			await runtime(argv);
 			return;
 		case "doctor":
 			await doctor(argv);
