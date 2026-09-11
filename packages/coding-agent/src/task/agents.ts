@@ -6,7 +6,6 @@
 import { Effort } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { parseAgentFields } from "../discovery/helpers";
-// Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
@@ -22,7 +21,6 @@ import wqVerifierMd from "../prompts/agents/wq-verifier.md" with { type: "text" 
 import wqWebMd from "../prompts/agents/wq-web.md" with { type: "text" };
 import wqWorkerMd from "../prompts/agents/wq-worker.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking";
-
 import type { AgentDefinition, AgentSource } from "./types";
 
 interface AgentFrontmatter {
@@ -53,8 +51,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "scout.md", template: scoutMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
-	// WQ competition agents carry their own complete frontmatter so the forked
-	// binary is immediately competition-capable without project-local dotfiles.
 	{ fileName: "wq-worker.md", template: wqWorkerMd },
 	{ fileName: "wq-critic.md", template: wqCriticMd },
 	{ fileName: "wq-verifier.md", template: wqVerifierMd },
@@ -72,10 +68,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			spawns: "*",
 			model: "@task",
 			thinkingLevel: AUTO_THINKING,
-			// No `prewalk` frontmatter: the generic task hand-off (strong model
-			// plans, then hands off to the smol role) is armed by the
-			// `task.prewalk` setting (default off) or per agent via /agents
-			// (task.agentPrewalk).
 		},
 		template: taskMd,
 	},
@@ -91,8 +83,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	},
 ];
 
-// Computed lazily on first loadBundledAgents() call to avoid eager prompt.render at module load.
-
 export class AgentParsingError extends Error {
 	constructor(
 		error: Error,
@@ -104,9 +94,7 @@ export class AgentParsingError extends Error {
 
 	override toString(): string {
 		const details: string[] = [this.message];
-		if (this.source !== undefined) {
-			details.push(`Source: ${JSON.stringify(this.source)}`);
-		}
+		if (this.source !== undefined) details.push(`Source: ${JSON.stringify(this.source)}`);
 		if (this.cause && typeof this.cause === "object" && "stack" in this.cause && this.cause.stack) {
 			details.push(`Stack:\n${this.cause.stack}`);
 		} else if (this.stack) {
@@ -116,27 +104,16 @@ export class AgentParsingError extends Error {
 	}
 }
 
-/** Parse an agent from embedded content. */
 export function parseAgent(
 	filePath: string,
 	content: string,
 	source: AgentSource,
 	level: "fatal" | "warn" | "off" = "fatal",
 ): AgentDefinition {
-	const { frontmatter, body } = parseFrontmatter(content, {
-		location: filePath,
-		level,
-	});
+	const { frontmatter, body } = parseFrontmatter(content, { location: filePath, level });
 	const fields = parseAgentFields(frontmatter);
-	if (!fields) {
-		throw new AgentParsingError(new Error(`Invalid agent field: ${filePath}\n${content}`), filePath);
-	}
-	return {
-		...fields,
-		systemPrompt: body,
-		source,
-		filePath,
-	};
+	if (!fields) throw new AgentParsingError(new Error(`Invalid agent field: ${filePath}\n${content}`), filePath);
+	return { ...fields, systemPrompt: body, source, filePath };
 }
 
 let bundledAgentsCache: AgentDefinition[] | null = null;
@@ -163,4 +140,4 @@ export function clearBundledAgentsCache(): void {
 	bundledAgentsCache = null;
 }
 
-export const BUNDLED_AGENTS = loadBundledAgents;
+export const BUNDLED_AGENTS = loadBundledAgents();
