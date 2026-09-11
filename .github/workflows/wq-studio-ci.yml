@@ -42,9 +42,6 @@ jobs:
       - name: Build Studio frontend
         shell: powershell
         run: bun --cwd=packages/wanwandequ-studio run build:web
-      - name: Check Studio Rust backend
-        shell: powershell
-        run: cargo check --manifest-path packages/wanwandequ-studio/src-tauri/Cargo.toml
       - name: Stage bundled Wanwandequ agent
         shell: powershell
         run: |
@@ -53,6 +50,9 @@ jobs:
           $url = "https://github.com/YHalo-wyh/omp-wanwandequ/releases/download/wq-dev/omp-wanwandequ-windows-x64.exe"
           & curl.exe -fL --retry 4 --retry-delay 2 --connect-timeout 20 -o "$dir/omp-wanwandequ-x86_64-pc-windows-msvc.exe" $url
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check Studio Rust backend
+        shell: powershell
+        run: cargo check --manifest-path packages/wanwandequ-studio/src-tauri/Cargo.toml
       - name: Build Studio installer
         shell: powershell
         run: bun --cwd=packages/wanwandequ-studio run studio:build
