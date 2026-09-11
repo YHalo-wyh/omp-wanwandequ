@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { installWqAuditLogging } from "./wq/logging";
@@ -10,6 +11,37 @@ import { installWqAuditLogging } from "./wq/logging";
 process.env.PI_CONFIG_DIR ||= process.env.WANWANDEQU_CONFIG_DIR || path.join(os.homedir(), ".omp-wanwandequ");
 process.env.OMP_CONFIG_DIR ||= process.env.PI_CONFIG_DIR;
 
+/**
+ * Load the standalone config-root .env before command routing. OMP itself also
+ * understands .env files later in startup, but WQ needs WQ_TEAM_TOKEN early so
+ * a bare `omp-wanwandequ` can decide between interactive test mode and fully
+ * autonomous competition mode.
+ */
+function loadStandaloneEnv(configRoot: string): void {
+	const file = path.join(configRoot, ".env");
+	let text = "";
+	try {
+		text = fs.readFileSync(file, "utf8");
+	} catch {
+		return;
+	}
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line || line.startsWith("#")) continue;
+		const eq = line.indexOf("=");
+		if (eq <= 0) continue;
+		const key = line.slice(0, eq).trim();
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || process.env[key] !== undefined) continue;
+		let value = line.slice(eq + 1).trim();
+		if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+			value = value.slice(1, -1);
+		}
+		process.env[key] = value;
+	}
+}
+
+loadStandaloneEnv(process.env.PI_CONFIG_DIR);
+
 // Every invocation leaves an auditable transcript in the launch working
 // directory. This is intentionally outside the private config root so a
 // competition organizer can inspect/copy the run evidence directly.
@@ -18,9 +50,10 @@ process.env.WANWANDEQU_LOG_DIR ||= audit.logDir;
 
 function normalizeWanwanArgv(argv: string[]): string[] {
 	const first = argv[0];
-	// Double-clicking the standalone exe or typing `omp-wanwandequ` now opens
-	// the native interactive WQ TUI instead of printing help and immediately exiting.
-	if (!first) return ["wq", "chat"];
+	// No-argument behavior is stateful by design:
+	// - no team token => interactive testing/TUI
+	// - team token configured => fully autonomous competition mode
+	if (!first) return ["wq", "auto"];
 
 	// Compiled OMP worker/subprocess selectors and root runtime flags must pass
 	// through untouched; the underlying OMP engine re-enters this same binary.
