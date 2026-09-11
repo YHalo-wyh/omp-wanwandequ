@@ -247,7 +247,10 @@ fn read_workspace_file(root: String, path: String) -> Result<FilePreview, String
     }
     let mut file = File::open(&target).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    file.by_ref().take(PREVIEW_LIMIT).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    std::io::Read::by_ref(&mut file)
+        .take(PREVIEW_LIMIT)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
     let truncated = meta.len() > PREVIEW_LIMIT;
     let text = String::from_utf8(bytes).ok();
     let binary = text.is_none();
@@ -337,7 +340,9 @@ fn start_agent(app: AppHandle, state: State<StudioState>, cwd: String, args: Vec
         return Err("工作区目录不存在".into());
     }
     let executable = find_agent(&app).ok_or_else(|| "未找到 omp-wanwandequ。请安装 Agent 或通过 WANWANDEQU_BIN 指定路径。".to_string())?;
-    let pair = native_pty_system().openpty(PtySize { rows: 35, cols: 130, pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
+    let pair = native_pty_system()
+        .openpty(PtySize { rows: 35, cols: 130, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| e.to_string())?;
     let mut command = CommandBuilder::new(executable.to_string_lossy().to_string());
     command.cwd(cwd_path.clone());
     command.env("TERM", "xterm-256color");
@@ -383,7 +388,10 @@ fn write_agent(state: State<StudioState>, data: String) -> Result<(), String> {
 fn resize_agent(state: State<StudioState>, cols: u16, rows: u16) -> Result<(), String> {
     let mut guard = state.process.lock().map_err(|_| "进程锁异常")?;
     if let Some(handle) = guard.as_mut() {
-        handle.master.resize(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
+        handle
+            .master
+            .resize(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 })
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
