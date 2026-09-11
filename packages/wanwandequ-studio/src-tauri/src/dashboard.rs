@@ -34,6 +34,12 @@ pub struct DashboardSnapshot {
     pub challenges: Vec<ChallengeView>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ChallengeMetadata {
+    title: String,
+    category: String,
+}
+
 fn read_json(path: &Path) -> Option<Value> {
     let text = fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
@@ -47,9 +53,36 @@ fn value_string(v: Option<&Value>) -> Option<String> {
     v.and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
+fn read_workspace_metadata(root: &Path) -> BTreeMap<String, ChallengeMetadata> {
+    let mut out = BTreeMap::new();
+    let Ok(entries) = fs::read_dir(root.join("workspaces")) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path().join("WQ_CHALLENGE.json");
+        let Some(meta) = read_json(&path) else { continue };
+        let Some(question_id) = meta.get("question_id").and_then(Value::as_str) else { continue };
+        out.insert(
+            question_id.to_owned(),
+            ChallengeMetadata {
+                title: value_string(meta.get("title")).unwrap_or_default(),
+                category: value_string(meta.get("category")).unwrap_or_default(),
+            },
+        );
+    }
+    out
+}
+
+fn clear_active(challenges: &mut BTreeMap<String, ChallengeView>) {
+    for item in challenges.values_mut() {
+        item.active = false;
+    }
+}
+
 pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
     let runtime = root.join(".wq");
     let state = read_json(&runtime.join("state.json"));
+    let metadata = read_workspace_metadata(root);
     let mut challenges: BTreeMap<String, ChallengeView> = BTreeMap::new();
     let mut snapshot = DashboardSnapshot::default();
 
@@ -57,8 +90,11 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
         snapshot.started_at = value_u64(state.get("startedAt"));
         if let Some(map) = state.get("challenges").and_then(Value::as_object) {
             for (question_id, value) in map {
-                let mut item = ChallengeView {
+                let meta = metadata.get(question_id).cloned().unwrap_or_default();
+                let item = ChallengeView {
                     question_id: question_id.clone(),
+                    title: meta.title,
+                    category: meta.category,
                     visits: value.get("visits").and_then(Value::as_u64).unwrap_or(0),
                     solved: value.get("solved").and_then(Value::as_bool).unwrap_or(false),
                     last_status: value_string(value.get("lastStatus")),
@@ -69,13 +105,8 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
                     artifacts: value.get("artifacts").and_then(Value::as_array).map_or(0, Vec::len),
                     rejected_flags: value.get("rejectedFlags").and_then(Value::as_array).map_or(0, Vec::len),
                     handoff: value_string(value.get("lastHandoff")),
-                    ..ChallengeView::default()
+                    active: false,
                 };
-                let metadata = root.join("workspaces").join(question_id).join("WQ_CHALLENGE.json");
-                if let Some(meta) = read_json(&metadata) {
-                    item.title = value_string(meta.get("title")).unwrap_or_default();
-                    item.category = value_string(meta.get("category")).unwrap_or_default();
-                }
                 challenges.insert(question_id.clone(), item);
             }
         }
@@ -92,8 +123,14 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
             let data = event.get("data").and_then(Value::as_object);
             let question_id = data.and_then(|d| d.get("questionId")).and_then(Value::as_str);
             match event_type {
-                "run.started" => snapshot.running = true,
-                "run.finished" | "run.scope_solved" => snapshot.running = false,
+                "run.started" => {
+                    snapshot.running = true;
+                    clear_active(&mut challenges);
+                }
+                "run.finished" | "run.scope_solved" => {
+                    snapshot.running = false;
+                    clear_active(&mut challenges);
+                }
                 "submit.accepted" => snapshot.accepted_submits += 1,
                 "submit.rejected" => snapshot.rejected_submits += 1,
                 "challenge.started" => {
@@ -123,6 +160,9 @@ pub fn read_dashboard(root: &Path) -> DashboardSnapshot {
         }
     }
 
+    if !snapshot.running {
+        clear_active(&mut challenges);
+    }
     snapshot.total = challenges.len();
     snapshot.solved = challenges.values().filter(|item| item.solved).count();
     snapshot.active = challenges.values().filter(|item| item.active).count();
