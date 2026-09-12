@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { recommendedSolverLanes } from "@oh-my-pi/pi-coding-agent/wq/solve";
+import { recommendedSolverLanes } from "@oh-my-pi/pi-coding-agent/wq/solver-policy";
 import { buildWqSolvePrompt } from "@oh-my-pi/pi-coding-agent/wq/system";
 
 describe("WQ solver lane policy", () => {
