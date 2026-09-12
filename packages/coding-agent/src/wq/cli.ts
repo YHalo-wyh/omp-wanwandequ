@@ -9,10 +9,6 @@ import { listWqPresets, resolveWqPreset, wqRuntimeOverrides, type WqPresetName }
 import { runWqCompetition } from "./scheduler";
 import { runWqChat, runWqRuntime, runWqSolve } from "./solve";
 
-const DEFAULT_QUERY_URL = "https://apiterminator.ichunqiu.com/04cb510e425bd8f64fa97ba66f3935e1";
-const DEFAULT_RESET_URL = "https://apiterminator.ichunqiu.com/deed3dba39e57b7cf95ea63ddd84e0c8";
-const DEFAULT_SUBMIT_URL = "https://apiterminator.ichunqiu.com/ff874ef3172cbf4fd6ec2c5653a568e2";
-
 function value(argv: string[], name: string): string | undefined {
 	const index = argv.indexOf(name);
 	if (index >= 0) return argv[index + 1];
@@ -49,6 +45,23 @@ function thinkingLevel(argv: string[]): string | undefined {
 	return value(argv, "--thinking") ?? process.env.WANWANDEQU_THINKING ?? process.env.WQ_THINKING;
 }
 
+function requiredEndpoint(argv: string[], cliName: string, envName: string): string {
+	const endpoint = (value(argv, cliName) ?? process.env[envName] ?? "").trim();
+	if (!endpoint) {
+		throw new Error(`${envName} is required for competition mode. Configure it with /wq-config, Studio, the environment, or ${cliName}.`);
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(endpoint);
+	} catch {
+		throw new Error(`${envName} must be an absolute http(s) URL`);
+	}
+	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+		throw new Error(`${envName} must use http or https`);
+	}
+	return parsed.toString();
+}
+
 function rejectModelOverride(argv: string[]): void {
 	for (const forbidden of ["--model", "--provider"]) {
 		if (argv.includes(forbidden) || argv.some(item => item.startsWith(`${forbidden}=`))) {
@@ -59,7 +72,7 @@ function rejectModelOverride(argv: string[]): void {
 
 function printHelp(): void {
 	process.stdout.write(`OMP-Wanwandequ ${VERSION}\n`);
-	process.stdout.write(`Autonomous Bay Area Cup CTF agent; model locked to ${WANWANDEQU_MODEL_ID}.\n\n`);
+	process.stdout.write(`Autonomous CTF agent; model locked to ${WANWANDEQU_MODEL_ID}.\n\n`);
 	process.stdout.write(`Usage:\n`);
 	process.stdout.write(`  omp-wanwandequ                         # chat if no team token; otherwise start unattended competition\n`);
 	process.stdout.write(`  omp-wanwandequ chat [--preset turbo]  # native interactive OMP TUI\n`);
@@ -69,7 +82,9 @@ function printHelp(): void {
 	process.stdout.write(`  omp-wanwandequ presets\n`);
 	process.stdout.write(`  omp-wanwandequ solve <path> [--objective TEXT] [--category pwn] [--preset turbo] [--inner N] [--advisor] [--thinking LEVEL]\n`);
 	process.stdout.write(`  omp-wanwandequ bench <path> [--repeat 3] [--expect flag{...}] [--inner 2|4|6] [--advisor] [--preset turbo]\n`);
-	process.stdout.write(`  omp-wanwandequ run [--duration 1800] [--preset turbo] [--dry-run] [--root DIR] [--categories pwn,reverse] [--questions 1,2]\n\n`);
+	process.stdout.write(`  omp-wanwandequ run [--duration 1800] [--preset turbo] [--dry-run] [--root DIR] [--categories pwn,reverse] [--questions 1,2]\n`);
+	process.stdout.write(`                     [--query-url URL] [--reset-url URL] [--submit-url URL]\n\n`);
+	process.stdout.write(`Competition endpoints are configuration, not compiled defaults: WQ_QUERY_URL, WQ_RESET_URL and WQ_SUBMIT_URL are required for run mode.\n`);
 	process.stdout.write(`runtime uses OMP's native RPC protocol on stdin/stdout; it does not emulate or scrape the TUI.\n`);
 	process.stdout.write(`All console output is mirrored to ./logs in the launch working directory.\n`);
 	process.stdout.write(`Setting WQ_TEAM_TOKEN arms no-argument unattended competition mode. Organizer gateway provider may be selected only with WANWANDEQU_PROVIDER; the model id remains ${WANWANDEQU_MODEL_ID}.\n`);
@@ -87,6 +102,7 @@ async function doctor(argv: string[]): Promise<void> {
 	process.stdout.write(`[WQ] batch=${settings.get("task.batch")} effort=${settings.get("task.enableEffort")} advisor=${settings.get("advisor.enabled")}\n`);
 	process.stdout.write(`[WQ] compaction=${settings.get("compaction.enabled")} asyncCompaction=${settings.get("compaction.asyncEnabled")} loopGuard=${settings.get("model.toolCallLoopGuard.enabled")}\n`);
 	process.stdout.write(`[WQ] teamToken=${process.env.WQ_TEAM_TOKEN?.trim() ? "configured/ARMED" : "not-configured/test-mode"}\n`);
+	process.stdout.write(`[WQ] competitionApi=query:${process.env.WQ_QUERY_URL?.trim() ? "configured" : "missing"} reset:${process.env.WQ_RESET_URL?.trim() ? "configured" : "missing"} submit:${process.env.WQ_SUBMIT_URL?.trim() ? "configured" : "missing"}\n`);
 	process.stdout.write(`[WQ] bundledAgents=${agents.map(agent => agent.name).join(",")}\n`);
 	const required = [
 		"wq-worker",
@@ -171,9 +187,9 @@ async function run(argv: string[]): Promise<void> {
 	if (!token.trim()) throw new Error("WQ_TEAM_TOKEN is required for autonomous competition mode");
 	await runWqCompetition({
 		token,
-		queryUrl: process.env.WQ_QUERY_URL || DEFAULT_QUERY_URL,
-		resetUrl: process.env.WQ_RESET_URL || DEFAULT_RESET_URL,
-		submitUrl: process.env.WQ_SUBMIT_URL || DEFAULT_SUBMIT_URL,
+		queryUrl: requiredEndpoint(argv, "--query-url", "WQ_QUERY_URL"),
+		resetUrl: requiredEndpoint(argv, "--reset-url", "WQ_RESET_URL"),
+		submitUrl: requiredEndpoint(argv, "--submit-url", "WQ_SUBMIT_URL"),
 		root: value(argv, "--root") ?? process.cwd(),
 		preset: presetName(argv),
 		durationSeconds: numberFlag(argv, "--duration"),
@@ -194,7 +210,7 @@ async function auto(argv: string[]): Promise<void> {
 		await run(["run", ...argv.slice(1)]);
 		return;
 	}
-	process.stdout.write("[WQ] no team token -> interactive test mode (run installer again and set the token to arm competition mode)\n");
+	process.stdout.write("[WQ] no team token -> interactive test mode\n");
 	await chat(["chat", ...argv.slice(1)]);
 }
 
