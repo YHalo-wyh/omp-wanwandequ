@@ -1,0 +1,40 @@
+name: WQ Nix Refresh
+
+on:
+  push:
+    branches:
+      - wq/nix-refresh-generated
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wq-nix-refresh-generated
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+      - name: Regenerate nix/bun.nix from bun.lock
+        run: |
+          nix develop .# --command bun2nix -l bun.lock -c ../ -o nix/bun.nix
+          sed -i -e '$a\' nix/bun.nix
+      - name: Commit generated dependency map
+        run: |
+          if git diff --quiet -- nix/bun.nix; then
+            echo 'nix/bun.nix is already current'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add nix/bun.nix
+          git commit -m 'chore(nix): refresh bun2nix dependencies'
+          git push origin HEAD:wq/nix-refresh-generated
