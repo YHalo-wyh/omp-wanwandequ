@@ -54,7 +54,12 @@ describe("WQ authored skills", () => {
 	it("materializes every bundled skill and omits retired generic packs", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "wq-skills-"));
 		cleanup.push(root);
-		const retired = ["wanwandequ-web-matrix", "wanwandequ-crypto-matrix", "wanwandequ-protocol", "wanwandequ-incident"];
+		const retired = [
+			"wanwandequ-web-matrix",
+			"wanwandequ-crypto-matrix",
+			"wanwandequ-protocol",
+			"wanwandequ-incident",
+		];
 		for (const name of retired) {
 			const dir = path.join(root, ".omp", "skills", name);
 			await fs.mkdir(dir, { recursive: true });

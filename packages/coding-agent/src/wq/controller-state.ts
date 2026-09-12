@@ -133,7 +133,10 @@ export async function acquireWqControllerLease(runtimeRoot: string, runId: strin
 			return;
 		} catch (error) {
 			if (!isRecord(error) || error.code !== "EEXIST") throw error;
-			const [existingLease, existingHeartbeat] = await Promise.all([readJson(file), readJson(heartbeatPath(runtimeRoot))]);
+			const [existingLease, existingHeartbeat] = await Promise.all([
+				readJson(file),
+				readJson(heartbeatPath(runtimeRoot)),
+			]);
 			const leaseStarted = isRecord(existingLease) ? finiteNumber(existingLease.startedAt) : undefined;
 			const heartbeatUpdated = isRecord(existingHeartbeat) ? finiteNumber(existingHeartbeat.updatedAt) : undefined;
 			const owner = isRecord(existingLease) && validRunId(existingLease.runId) ? existingLease.runId : "unknown";

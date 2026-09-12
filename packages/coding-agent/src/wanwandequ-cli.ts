@@ -85,7 +85,12 @@ function launchedFromWindowsExplorer(): boolean {
 	try {
 		const result = spawnSync(
 			"powershell.exe",
-			["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${process.ppid} -ErrorAction Stop).ProcessName`],
+			[
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				`(Get-Process -Id ${process.ppid} -ErrorAction Stop).ProcessName`,
+			],
 			{ encoding: "utf8", windowsHide: true },
 		);
 		return result.status === 0 && result.stdout.trim().toLowerCase() === "explorer";
@@ -142,7 +147,9 @@ void import("./cli")
 		if (process.env.PI_COMPILED !== "true") await runCli(normalized);
 	})
 	.catch(async error => {
-		process.stderr.write(`omp-wanwandequ fatal: ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+		process.stderr.write(
+			`omp-wanwandequ fatal: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+		);
 		process.exitCode = 1;
 		// Last-resort safety for a directly opened console if Explorer detection is
 		// unavailable on a particular Windows build. Never pause scripted/CI runs.

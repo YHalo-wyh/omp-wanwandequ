@@ -48,7 +48,9 @@ function thinkingLevel(argv: string[]): string | undefined {
 function requiredEndpoint(argv: string[], cliName: string, envName: string): string {
 	const endpoint = (value(argv, cliName) ?? process.env[envName] ?? "").trim();
 	if (!endpoint) {
-		throw new Error(`${envName} is required for competition mode. Configure it with /wq-config, Studio, the environment, or ${cliName}.`);
+		throw new Error(
+			`${envName} is required for competition mode. Configure it with /wq-config, Studio, the environment, or ${cliName}.`,
+		);
 	}
 	let parsed: URL;
 	try {
@@ -74,20 +76,36 @@ function printHelp(): void {
 	process.stdout.write(`OMP-Wanwandequ ${VERSION}\n`);
 	process.stdout.write(`Autonomous CTF agent; model locked to ${WANWANDEQU_MODEL_ID}.\n\n`);
 	process.stdout.write(`Usage:\n`);
-	process.stdout.write(`  omp-wanwandequ                         # chat if no team token; otherwise start unattended competition\n`);
+	process.stdout.write(
+		`  omp-wanwandequ                         # chat if no team token; otherwise start unattended competition\n`,
+	);
 	process.stdout.write(`  omp-wanwandequ chat [--preset turbo]  # native interactive OMP TUI\n`);
-	process.stdout.write(`  omp-wanwandequ runtime [--preset turbo] # headless JSONL RPC runtime for Studio/embedders\n`);
+	process.stdout.write(
+		`  omp-wanwandequ runtime [--preset turbo] # headless JSONL RPC runtime for Studio/embedders\n`,
+	);
 	process.stdout.write(`  omp-wanwandequ doctor [--preset turbo]\n`);
 	process.stdout.write(`  omp-wanwandequ agents\n`);
 	process.stdout.write(`  omp-wanwandequ presets\n`);
-	process.stdout.write(`  omp-wanwandequ solve <path> [--objective TEXT] [--category pwn] [--preset turbo] [--inner N] [--advisor] [--thinking LEVEL]\n`);
-	process.stdout.write(`  omp-wanwandequ bench <path> [--repeat 3] [--expect flag{...}] [--inner 2|4|6] [--advisor] [--preset turbo]\n`);
-	process.stdout.write(`  omp-wanwandequ run [--duration 1800] [--preset turbo] [--dry-run] [--root DIR] [--categories pwn,reverse] [--questions 1,2]\n`);
+	process.stdout.write(
+		`  omp-wanwandequ solve <path> [--objective TEXT] [--category pwn] [--preset turbo] [--inner N] [--advisor] [--thinking LEVEL]\n`,
+	);
+	process.stdout.write(
+		`  omp-wanwandequ bench <path> [--repeat 3] [--expect flag{...}] [--inner 2|4|6] [--advisor] [--preset turbo]\n`,
+	);
+	process.stdout.write(
+		`  omp-wanwandequ run [--duration 1800] [--preset turbo] [--dry-run] [--root DIR] [--categories pwn,reverse] [--questions 1,2]\n`,
+	);
 	process.stdout.write(`                     [--query-url URL] [--reset-url URL] [--submit-url URL]\n\n`);
-	process.stdout.write(`Competition endpoints are configuration, not compiled defaults: WQ_QUERY_URL, WQ_RESET_URL and WQ_SUBMIT_URL are required for run mode.\n`);
-	process.stdout.write(`runtime uses OMP's native RPC protocol on stdin/stdout; it does not emulate or scrape the TUI.\n`);
+	process.stdout.write(
+		`Competition endpoints are configuration, not compiled defaults: WQ_QUERY_URL, WQ_RESET_URL and WQ_SUBMIT_URL are required for run mode.\n`,
+	);
+	process.stdout.write(
+		`runtime uses OMP's native RPC protocol on stdin/stdout; it does not emulate or scrape the TUI.\n`,
+	);
 	process.stdout.write(`All console output is mirrored to ./logs in the launch working directory.\n`);
-	process.stdout.write(`Setting WQ_TEAM_TOKEN arms no-argument unattended competition mode. Organizer gateway provider may be selected only with WANWANDEQU_PROVIDER; the model id remains ${WANWANDEQU_MODEL_ID}.\n`);
+	process.stdout.write(
+		`Setting WQ_TEAM_TOKEN arms no-argument unattended competition mode. Organizer gateway provider may be selected only with WANWANDEQU_PROVIDER; the model id remains ${WANWANDEQU_MODEL_ID}.\n`,
+	);
 }
 
 async function doctor(argv: string[]): Promise<void> {
@@ -97,12 +115,24 @@ async function doctor(argv: string[]): Promise<void> {
 	const agents = loadBundledAgents().filter(agent => agent.name.startsWith("wq-"));
 	process.stdout.write(`[WQ] omp-wanwandequ ${VERSION}\n`);
 	process.stdout.write(`[WQ] cwd=${cwd}\n`);
-	process.stdout.write(`[WQ] model=${wanwandequModelSelector()} provider=${wanwandequProvider()} modelFallback=${settings.get("retry.modelFallback")}\n`);
-	process.stdout.write(`[WQ] preset=${preset.name} activeChallenges=${preset.activeChallenges} inner=${settings.get("task.maxConcurrency")} recursion=${settings.get("task.maxRecursionDepth")}\n`);
-	process.stdout.write(`[WQ] batch=${settings.get("task.batch")} effort=${settings.get("task.enableEffort")} advisor=${settings.get("advisor.enabled")}\n`);
-	process.stdout.write(`[WQ] compaction=${settings.get("compaction.enabled")} asyncCompaction=${settings.get("compaction.asyncEnabled")} loopGuard=${settings.get("model.toolCallLoopGuard.enabled")}\n`);
-	process.stdout.write(`[WQ] teamToken=${process.env.WQ_TEAM_TOKEN?.trim() ? "configured/ARMED" : "not-configured/test-mode"}\n`);
-	process.stdout.write(`[WQ] competitionApi=query:${process.env.WQ_QUERY_URL?.trim() ? "configured" : "missing"} reset:${process.env.WQ_RESET_URL?.trim() ? "configured" : "missing"} submit:${process.env.WQ_SUBMIT_URL?.trim() ? "configured" : "missing"}\n`);
+	process.stdout.write(
+		`[WQ] model=${wanwandequModelSelector()} provider=${wanwandequProvider()} modelFallback=${settings.get("retry.modelFallback")}\n`,
+	);
+	process.stdout.write(
+		`[WQ] preset=${preset.name} activeChallenges=${preset.activeChallenges} inner=${settings.get("task.maxConcurrency")} recursion=${settings.get("task.maxRecursionDepth")}\n`,
+	);
+	process.stdout.write(
+		`[WQ] batch=${settings.get("task.batch")} effort=${settings.get("task.enableEffort")} advisor=${settings.get("advisor.enabled")}\n`,
+	);
+	process.stdout.write(
+		`[WQ] compaction=${settings.get("compaction.enabled")} asyncCompaction=${settings.get("compaction.asyncEnabled")} loopGuard=${settings.get("model.toolCallLoopGuard.enabled")}\n`,
+	);
+	process.stdout.write(
+		`[WQ] teamToken=${process.env.WQ_TEAM_TOKEN?.trim() ? "configured/ARMED" : "not-configured/test-mode"}\n`,
+	);
+	process.stdout.write(
+		`[WQ] competitionApi=query:${process.env.WQ_QUERY_URL?.trim() ? "configured" : "missing"} reset:${process.env.WQ_RESET_URL?.trim() ? "configured" : "missing"} submit:${process.env.WQ_SUBMIT_URL?.trim() ? "configured" : "missing"}\n`,
+	);
 	process.stdout.write(`[WQ] bundledAgents=${agents.map(agent => agent.name).join(",")}\n`);
 	const required = [
 		"wq-worker",
@@ -145,7 +175,8 @@ async function runtime(argv: string[]): Promise<void> {
 async function solve(argv: string[]): Promise<void> {
 	rejectModelOverride(argv);
 	const targetArg = argv[1];
-	if (!targetArg || targetArg.startsWith("-")) throw new Error("omp-wanwandequ solve requires a challenge file/directory path");
+	if (!targetArg || targetArg.startsWith("-"))
+		throw new Error("omp-wanwandequ solve requires a challenge file/directory path");
 	const target = path.resolve(targetArg);
 	await fs.access(target);
 	await runWqSolve({
@@ -166,7 +197,8 @@ async function solve(argv: string[]): Promise<void> {
 async function bench(argv: string[]): Promise<void> {
 	rejectModelOverride(argv);
 	const source = argv[1];
-	if (!source || source.startsWith("-")) throw new Error("omp-wanwandequ bench requires a challenge file/directory path");
+	if (!source || source.startsWith("-"))
+		throw new Error("omp-wanwandequ bench requires a challenge file/directory path");
 	await runWqBench({
 		source,
 		repeat: numberFlag(argv, "--repeat"),

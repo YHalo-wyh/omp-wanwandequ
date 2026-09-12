@@ -115,7 +115,9 @@ export function challengePriority(
 	const progress = 1 + Math.min(1.5, state.facts.length * 0.08 + state.artifacts.length * 0.12);
 	const visitPenalty = 1 + state.visits * 0.32;
 	const blockedPenalty = state.lastStatus === "blocked" ? 0.72 : 1;
-	const rescueBoost = options.rescue ? 1 + Math.min(2.5, state.facts.length * 0.18 + state.artifacts.length * 0.25) : 1;
+	const rescueBoost = options.rescue
+		? 1 + Math.min(2.5, state.facts.length * 0.18 + state.artifacts.length * 0.25)
+		: 1;
 	return (score * ease * progress * blockedPenalty * rescueBoost) / visitPenalty;
 }
 
