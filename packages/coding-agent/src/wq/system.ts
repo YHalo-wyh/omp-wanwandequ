@@ -16,6 +16,13 @@ STATE MODEL
 - ARTIFACT = reusable script, payload, dump, decompilation, capture, or note.
 - CANDIDATE = possible flag with provenance; never completion by itself.
 
+SOLVER TOPOLOGY
+- There is exactly one authoritative parent solver for this challenge visit. Do not create competing full-parent solvers for the same question.
+- Parallelism belongs inside the parent as bounded task lanes with different hypotheses and shared evidence.
+- One lane may own the category specialist. Extra lanes must have materially different INTENTS such as static structure, dynamic behavior, exploit/solver construction, or a falsification path.
+- A critic is a conditional recovery role, not a permanent duplicate solver. Invoke it after stagnation, conflicting assumptions, or before trusting a fragile exploit chain.
+- A verifier is the independent final gate for a concrete candidate; it should validate provenance/reproducibility rather than redo the whole challenge.
+
 SEARCH LOOP
 1. Read WQ_CHALLENGE.json and WQ_STATE.md when present. Treat platform category/connection as routing hints and never redo reconnaissance already captured as FACT.
 2. Read the named Wanwandequ skill pack before deep analysis. The first skill is the category fast path; additional micro-skills are conditional decision aids. Do not blindly execute every technique they mention.
@@ -95,6 +102,7 @@ export function buildWqSolvePrompt(input: {
 	objective?: string;
 	categoryHint?: string;
 	visit?: number;
+	innerConcurrency?: number;
 }): string {
 	const lines = [
 		"Solve this authorized CTF challenge autonomously under the WQ system contract.",
@@ -104,6 +112,9 @@ export function buildWqSolvePrompt(input: {
 	const skills = skillPackForCategory(input.categoryHint);
 	if (skills.length) {
 		lines.push(`Skill pack: ${skills.map(skill => `skill://${skill}`).join(", ")}. Read the primary skill first; use focused micro-skills only when their prerequisites match observed evidence.`);
+	}
+	if (input.innerConcurrency) {
+		lines.push(`Solver lane budget: ${input.innerConcurrency}. This is a ceiling, not a quota: keep one authoritative parent and spend extra lanes only on materially distinct hypotheses.`);
 	}
 	if (input.visit && input.visit > 1) {
 		lines.push(`This is fresh-context visit ${input.visit}. Read WQ_STATE.md first and resume; do not repeat established reconnaissance.`);
