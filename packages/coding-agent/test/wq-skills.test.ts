@@ -11,6 +11,15 @@ import {
 
 const cleanup: string[] = [];
 
+async function exists(file: string): Promise<boolean> {
+	try {
+		await fs.access(file);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 afterEach(async () => {
 	await Promise.all(cleanup.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -61,7 +70,7 @@ describe("WQ authored skills", () => {
 		expect(pwn).toContain("PWN Fast Path");
 		expect(heap).toContain("Modern Heap Fast Path");
 		for (const name of retired) {
-			expect(await fs.exists(path.join(root, ".omp", "skills", name))).toBe(false);
+			expect(await exists(path.join(root, ".omp", "skills", name))).toBe(false);
 		}
 	});
 });
