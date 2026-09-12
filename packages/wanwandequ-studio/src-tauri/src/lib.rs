@@ -17,9 +17,6 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const DEFAULT_QUERY_URL: &str = "https://apiterminator.ichunqiu.com/04cb510e425bd8f64fa97ba66f3935e1";
-const DEFAULT_RESET_URL: &str = "https://apiterminator.ichunqiu.com/deed3dba39e57b7cf95ea63ddd84e0c8";
-const DEFAULT_SUBMIT_URL: &str = "https://apiterminator.ichunqiu.com/ff874ef3172cbf4fd6ec2c5653a568e2";
 const MODEL_ID: &str = "deepseek-v4-flash";
 const PREVIEW_LIMIT: u64 = 1024 * 1024;
 
@@ -473,9 +470,9 @@ fn studio_status(app: AppHandle, state: State<StudioState>, workspace: Option<St
         provider: configured_or("WANWANDEQU_PROVIDER", "deepseek"),
         preset: configured_or("WANWANDEQU_PRESET", "turbo"),
         model_id: MODEL_ID.to_string(),
-        query_url: configured_or("WQ_QUERY_URL", DEFAULT_QUERY_URL),
-        reset_url: configured_or("WQ_RESET_URL", DEFAULT_RESET_URL),
-        submit_url: configured_or("WQ_SUBMIT_URL", DEFAULT_SUBMIT_URL),
+        query_url: configured_or("WQ_QUERY_URL", ""),
+        reset_url: configured_or("WQ_RESET_URL", ""),
+        submit_url: configured_or("WQ_SUBMIT_URL", ""),
     }
 }
 
