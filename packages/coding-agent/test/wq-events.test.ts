@@ -26,7 +26,9 @@ describe("WqEventLog", () => {
 		const lines = (await fs.readFile(path.join(root, "events.jsonl"), "utf8"))
 			.trim()
 			.split(/\r?\n/)
-			.map(line => JSON.parse(line) as { version: number; seq: number; type: string; data: Record<string, unknown> });
+			.map(
+				line => JSON.parse(line) as { version: number; seq: number; type: string; data: Record<string, unknown> },
+			);
 
 		expect(lines).toHaveLength(3);
 		expect(lines.map(item => item.seq)).toEqual([1, 2, 3]);

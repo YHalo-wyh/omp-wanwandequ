@@ -21,13 +21,7 @@ export function recommendedSolverLanes(category: string | undefined, visit: numb
 	return Math.min(ceiling, baseline + revisitBoost);
 }
 
-export type WqSolverAgent =
-	| "wq-pwn"
-	| "wq-reverse"
-	| "wq-web"
-	| "wq-crypto"
-	| "wq-forensics"
-	| "wq-worker";
+export type WqSolverAgent = "wq-pwn" | "wq-reverse" | "wq-web" | "wq-crypto" | "wq-forensics" | "wq-worker";
 
 export interface WqSolverLaneIntent {
 	agent: WqSolverAgent;

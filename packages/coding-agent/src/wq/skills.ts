@@ -56,7 +56,10 @@ export function skillPackForCategory(category: string | undefined): string[] {
 	if (/\b(web|web security|web pentest|web penetration)\b/.test(normalized)) return [...pack, "wanwandequ-web"];
 	if (/\b(crypto|cryptography|cipher)\b/.test(normalized)) return [...pack, "wanwandequ-crypto"];
 	if (/\b(forensic|forensics|stego|memory)\b/.test(normalized)) return [...pack, "wanwandequ-forensics"];
-	if (/\b(misc|encoding|archive|file format|protocol|network|incident|log)\b/.test(normalized) || /协议|应急|日志/.test(normalized)) {
+	if (
+		/\b(misc|encoding|archive|file format|protocol|network|incident|log)\b/.test(normalized) ||
+		/协议|应急|日志/.test(normalized)
+	) {
 		return [...pack, "wanwandequ-misc-triage", "wanwandequ-forensics"];
 	}
 	return [...pack, "wanwandequ-misc-triage"];

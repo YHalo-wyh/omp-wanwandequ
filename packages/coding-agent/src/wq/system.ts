@@ -113,10 +113,14 @@ export function buildWqSolvePrompt(input: {
 	if (input.categoryHint) lines.push(`Category hint: ${input.categoryHint}`);
 	const skills = skillPackForCategory(input.categoryHint);
 	if (skills.length) {
-		lines.push(`Skill pack: ${skills.map(skill => `skill://${skill}`).join(", ")}. Read the primary skill first; use focused micro-skills only when their prerequisites match observed evidence.`);
+		lines.push(
+			`Skill pack: ${skills.map(skill => `skill://${skill}`).join(", ")}. Read the primary skill first; use focused micro-skills only when their prerequisites match observed evidence.`,
+		);
 	}
 	if (input.innerConcurrency) {
-		lines.push(`Solver lane budget: ${input.innerConcurrency}. This is a ceiling, not a quota: keep one authoritative parent and spend extra lanes only on materially distinct hypotheses.`);
+		lines.push(
+			`Solver lane budget: ${input.innerConcurrency}. This is a ceiling, not a quota: keep one authoritative parent and spend extra lanes only on materially distinct hypotheses.`,
+		);
 	}
 	if (input.lanePlan?.length) {
 		lines.push("Recommended Task lane plan (ordered; adapt or launch fewer only when evidence justifies it):");
@@ -125,9 +129,13 @@ export function buildWqSolvePrompt(input: {
 		}
 	}
 	if (input.visit && input.visit > 1) {
-		lines.push(`This is fresh-context visit ${input.visit}. Read WQ_STATE.md first and resume; do not repeat established reconnaissance.`);
+		lines.push(
+			`This is fresh-context visit ${input.visit}. Read WQ_STATE.md first and resume; do not repeat established reconnaissance.`,
+		);
 	}
 	if (input.objective?.trim()) lines.push(`Objective/context: ${input.objective.trim()}`);
-	lines.push("Start with the cheapest decisive action, use specialist + distinct Intent lanes only when they increase search coverage, and close the shortest route to a verifier-approved flag.");
+	lines.push(
+		"Start with the cheapest decisive action, use specialist + distinct Intent lanes only when they increase search coverage, and close the shortest route to a verifier-approved flag.",
+	);
 	return lines.join("\n");
 }

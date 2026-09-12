@@ -47,11 +47,14 @@ export async function spawnSelfCapture(
 		} catch {}
 	};
 	const timeout = new Promise<number>(resolve => {
-		timer = setTimeout(() => {
-			timedOut = true;
-			kill();
-			resolve(124);
-		}, Math.max(1_000, options.timeoutMs));
+		timer = setTimeout(
+			() => {
+				timedOut = true;
+				kill();
+				resolve(124);
+			},
+			Math.max(1_000, options.timeoutMs),
+		);
 	});
 	const abort = new Promise<number>(resolve => {
 		const signal = options.signal;

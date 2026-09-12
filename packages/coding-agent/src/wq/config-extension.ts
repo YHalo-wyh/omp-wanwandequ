@@ -10,7 +10,11 @@ const RESET_URL = "WQ_RESET_URL";
 const SUBMIT_URL = "WQ_SUBMIT_URL";
 
 function configRoot(): string {
-	return process.env.WANWANDEQU_CONFIG_DIR?.trim() || process.env.PI_CONFIG_DIR?.trim() || path.join(os.homedir(), ".omp-wanwandequ");
+	return (
+		process.env.WANWANDEQU_CONFIG_DIR?.trim() ||
+		process.env.PI_CONFIG_DIR?.trim() ||
+		path.join(os.homedir(), ".omp-wanwandequ")
+	);
 }
 
 export function wqEnvPath(): string {
@@ -98,7 +102,12 @@ async function setSecret(kind: "api" | "token", ctx: ExtensionContext): Promise<
 	const envKey = isApi ? API_KEY : TEAM_TOKEN;
 	await persistWqEnvValue(envKey, trimmed);
 	process.env[envKey] = trimmed;
-	ctx.ui.notify(isApi ? "DeepSeek API key saved for omp-wanwandequ." : "Team token saved. Wanwandequ is ARMED when all competition endpoints are configured.", "info");
+	ctx.ui.notify(
+		isApi
+			? "DeepSeek API key saved for omp-wanwandequ."
+			: "Team token saved. Wanwandequ is ARMED when all competition endpoints are configured.",
+		"info",
+	);
 }
 
 async function setEndpoint(key: string, title: string, ctx: ExtensionContext): Promise<void> {
@@ -119,7 +128,10 @@ async function clearSecret(kind: "api" | "token", ctx: ExtensionContext): Promis
 	const envKey = kind === "api" ? API_KEY : TEAM_TOKEN;
 	await persistWqEnvValue(envKey, "");
 	delete process.env[envKey];
-	ctx.ui.notify(kind === "api" ? "DeepSeek API key cleared." : "Team token cleared; bare launch returns to test chat mode.", "info");
+	ctx.ui.notify(
+		kind === "api" ? "DeepSeek API key cleared." : "Team token cleared; bare launch returns to test chat mode.",
+		"info",
+	);
 }
 
 export const wqConfigExtension: ExtensionFactory = pi => {
@@ -165,13 +177,17 @@ export const wqConfigExtension: ExtensionFactory = pi => {
 			]);
 			if (!choice) return;
 			if (choice.startsWith("Status")) {
-				ctx.ui.notify(`DeepSeek key: ${maskedStatus(process.env[API_KEY])} · Team token: ${maskedStatus(process.env[TEAM_TOKEN])} · ${endpointStatus()}`, "info");
+				ctx.ui.notify(
+					`DeepSeek key: ${maskedStatus(process.env[API_KEY])} · Team token: ${maskedStatus(process.env[TEAM_TOKEN])} · ${endpointStatus()}`,
+					"info",
+				);
 				return;
 			}
 			if (choice === "Set/replace DeepSeek API key") return setSecret("api", ctx);
 			if (choice === "Set/replace competition team token") return setSecret("token", ctx);
 			if (choice === "Set question query endpoint") return setEndpoint(QUERY_URL, "Question query endpoint", ctx);
-			if (choice === "Set environment reset endpoint") return setEndpoint(RESET_URL, "Environment reset endpoint", ctx);
+			if (choice === "Set environment reset endpoint")
+				return setEndpoint(RESET_URL, "Environment reset endpoint", ctx);
 			if (choice === "Set flag submit endpoint") return setEndpoint(SUBMIT_URL, "Flag submit endpoint", ctx);
 			if (choice === "Clear competition team token") return clearSecret("token", ctx);
 			if (choice === "Clear DeepSeek API key") return clearSecret("api", ctx);

@@ -120,7 +120,15 @@ export function normalizeChallengeList(payload: unknown): WqChallenge[] {
 }
 
 function retryableStatus(status: number): boolean {
-	return status === 408 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+	return (
+		status === 408 ||
+		status === 425 ||
+		status === 429 ||
+		status === 500 ||
+		status === 502 ||
+		status === 503 ||
+		status === 504
+	);
 }
 
 function jitterDelay(attempt: number, response?: Response): number {

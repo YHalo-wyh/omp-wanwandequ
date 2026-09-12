@@ -73,11 +73,19 @@ export function installWqAuditLogging(cwd = process.cwd()): WqAuditLog {
 		}
 	};
 
-	(process.stdout.write as unknown as (...args: unknown[]) => boolean) = ((chunk: unknown, encoding?: BufferEncoding, cb?: () => void) => {
+	(process.stdout.write as unknown as (...args: unknown[]) => boolean) = ((
+		chunk: unknown,
+		encoding?: BufferEncoding,
+		cb?: () => void,
+	) => {
 		append("stdout", chunk, encoding);
 		return originalStdout(chunk as never, encoding as never, cb as never);
 	}) as never;
-	(process.stderr.write as unknown as (...args: unknown[]) => boolean) = ((chunk: unknown, encoding?: BufferEncoding, cb?: () => void) => {
+	(process.stderr.write as unknown as (...args: unknown[]) => boolean) = ((
+		chunk: unknown,
+		encoding?: BufferEncoding,
+		cb?: () => void,
+	) => {
 		append("stderr", chunk, encoding);
 		return originalStderr(chunk as never, encoding as never, cb as never);
 	}) as never;
