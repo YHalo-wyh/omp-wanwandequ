@@ -34,6 +34,29 @@ export interface WqChatOptions {
 
 export type WqRuntimeOptions = WqChatOptions;
 
+/**
+ * Pick a bounded task-lane budget for one challenge parent.
+ *
+ * A challenge gets one authoritative parent session. Concurrency is spent on
+ * differentiated specialist/intent lanes inside that parent rather than on a
+ * swarm of independent full solvers that rediscover the same facts. Binary
+ * challenges benefit from one extra first-pass lane (static/dynamic/exploit),
+ * while later fresh-context visits ramp up only after prior evidence exists.
+ * The preset remains a hard ceiling and an explicit --inner-concurrency still
+ * overrides this policy.
+ */
+export function recommendedSolverLanes(category: string | undefined, visit: number | undefined, cap: number): number {
+	const ceiling = Math.max(1, Math.floor(cap));
+	const normalized = category?.trim().toLowerCase() ?? "";
+	const binaryHeavy = /\b(pwn|binary exploit|binary exploitation|reverse|re|reversing|reverse engineering)\b/.test(
+		normalized,
+	);
+	const baseline = binaryHeavy ? 3 : 2;
+	const visitNumber = Math.max(1, Math.floor(visit ?? 1));
+	const revisitBoost = Math.min(3, visitNumber - 1);
+	return Math.min(ceiling, baseline + revisitBoost);
+}
+
 function mergeAppendPrompt(existing: string | undefined): string {
 	return existing?.trim() ? `${existing.trim()}\n\n${WQ_SYSTEM_PROMPT}` : WQ_SYSTEM_PROMPT;
 }
@@ -107,6 +130,8 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 	const cwd = stat.isDirectory() ? target : path.dirname(target);
 	const preset = resolveWqPreset(options.preset);
 	const timeoutSeconds = Math.max(30, Math.floor(options.timeoutSeconds ?? preset.visitSeconds));
+	const innerConcurrency =
+		options.innerConcurrency ?? recommendedSolverLanes(options.category, options.visit, preset.innerConcurrency);
 
 	// WQ ships authored OMP skills inside the standalone binary, then materializes
 	// them into the isolated challenge workspace so normal OMP skill discovery and
@@ -117,7 +142,7 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 		cwd,
 		overrides: wqRuntimeOverrides(preset, {
 			advisor: options.advisor,
-			innerConcurrency: options.innerConcurrency,
+			innerConcurrency,
 		}),
 	});
 
@@ -126,6 +151,7 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 		objective: options.objective,
 		categoryHint: options.category,
 		visit: options.visit,
+		innerConcurrency,
 	});
 
 	const rawArgs: string[] = [
