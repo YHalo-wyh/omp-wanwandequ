@@ -1,4 +1,5 @@
 import { skillPackForCategory } from "./skills";
+import type { WqSolverLaneIntent } from "./solver-policy";
 
 export const WQ_RESULT_OPEN = "<WQ_RESULT>";
 export const WQ_RESULT_CLOSE = "</WQ_RESULT>";
@@ -103,6 +104,7 @@ export function buildWqSolvePrompt(input: {
 	categoryHint?: string;
 	visit?: number;
 	innerConcurrency?: number;
+	lanePlan?: readonly WqSolverLaneIntent[];
 }): string {
 	const lines = [
 		"Solve this authorized CTF challenge autonomously under the WQ system contract.",
@@ -115,6 +117,12 @@ export function buildWqSolvePrompt(input: {
 	}
 	if (input.innerConcurrency) {
 		lines.push(`Solver lane budget: ${input.innerConcurrency}. This is a ceiling, not a quota: keep one authoritative parent and spend extra lanes only on materially distinct hypotheses.`);
+	}
+	if (input.lanePlan?.length) {
+		lines.push("Recommended Task lane plan (ordered; adapt or launch fewer only when evidence justifies it):");
+		for (const [index, lane] of input.lanePlan.entries()) {
+			lines.push(`- Lane ${index + 1} -> ${lane.agent}: ${lane.intent}`);
+		}
 	}
 	if (input.visit && input.visit > 1) {
 		lines.push(`This is fresh-context visit ${input.visit}. Read WQ_STATE.md first and resume; do not repeat established reconnaissance.`);

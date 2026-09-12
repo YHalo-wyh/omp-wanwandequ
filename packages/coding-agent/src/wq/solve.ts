@@ -8,7 +8,7 @@ import { wqConfigExtension } from "./config-extension";
 import { wanwandequModelSelector } from "./model";
 import { resolveWqPreset, wqRuntimeOverrides, type WqPresetName } from "./preset";
 import { materializeWqSkills } from "./skills";
-import { recommendedSolverLanes } from "./solver-policy";
+import { buildSolverLanePlan, recommendedSolverLanes } from "./solver-policy";
 import { buildWqSolvePrompt, WQ_SYSTEM_PROMPT } from "./system";
 
 export interface WqSolveOptions {
@@ -110,6 +110,7 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 	const timeoutSeconds = Math.max(30, Math.floor(options.timeoutSeconds ?? preset.visitSeconds));
 	const innerConcurrency =
 		options.innerConcurrency ?? recommendedSolverLanes(options.category, options.visit, preset.innerConcurrency);
+	const lanePlan = buildSolverLanePlan(options.category, options.visit, innerConcurrency);
 
 	// WQ ships authored OMP skills inside the standalone binary, then materializes
 	// them into the isolated challenge workspace so normal OMP skill discovery and
@@ -130,6 +131,7 @@ export async function runWqSolve(options: WqSolveOptions): Promise<void> {
 		categoryHint: options.category,
 		visit: options.visit,
 		innerConcurrency,
+		lanePlan,
 	});
 
 	const rawArgs: string[] = [
