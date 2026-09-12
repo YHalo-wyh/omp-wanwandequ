@@ -27,6 +27,7 @@ export const WQ_SKILLS: readonly WqSkillDefinition[] = Object.freeze([
 	{ name: "wanwandequ-misc-triage", content: miscTriageSkill },
 ]);
 
+const CORE_SKILL = "wanwandequ-ctf-core";
 const RETIRED_SKILLS = Object.freeze([
 	"wanwandequ-web-matrix",
 	"wanwandequ-crypto-matrix",
@@ -35,12 +36,12 @@ const RETIRED_SKILLS = Object.freeze([
 ]);
 
 export function skillForCategory(category: string | undefined): string | undefined {
-	return skillPackForCategory(category)[0];
+	return skillPackForCategory(category).find(name => name !== CORE_SKILL);
 }
 
 export function skillPackForCategory(category: string | undefined): string[] {
 	const normalized = category?.trim().toLowerCase() ?? "";
-	const pack = ["wanwandequ-ctf-core"];
+	const pack = [CORE_SKILL];
 	if (!normalized) return [...pack, "wanwandequ-misc-triage"];
 	if (/\b(pwn|binary exploit|binary exploitation|heap|stack|rop)\b/.test(normalized)) {
 		return /heap|glibc|malloc|tcache|fastbin|unsorted|smallbin|largebin/.test(normalized)
