@@ -1,0 +1,9 @@
+# WQCup: competition provides effectively unlimited model tokens.
+# Token cost is not the limiting factor; still avoid useless duplicate work.
+async:
+  enabled: true
+
+task:
+  batch: true
+  maxConcurrency: 12
+  maxRecursionDepth: 2
