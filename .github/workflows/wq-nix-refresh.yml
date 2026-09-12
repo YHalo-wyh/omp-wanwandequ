@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - wq/nix-refresh-generated
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -28,6 +31,7 @@ jobs:
           nix develop .# --command bun2nix -l bun.lock -c ../ -o nix/bun.nix
           sed -i -e '$a\' nix/bun.nix
       - name: Commit generated dependency map
+        if: github.event_name == 'pull_request'
         run: |
           if git diff --quiet -- nix/bun.nix; then
             echo 'nix/bun.nix is already current'
