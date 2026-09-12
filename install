@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Public installer entry for https://omp-wanwandequ.sh/install
+# Keep this file dependency-free so it can be served directly by any static host/CDN.
+REPO="${OMP_WANWANDEQU_REPO:-YHalo-wyh/omp-wanwandequ}"
+TAG="${OMP_WANWANDEQU_VERSION:-wq-dev}"
+INSTALL_DIR="${OMP_WANWANDEQU_INSTALL_DIR:-$HOME/.local/bin}"
+CONFIG_DIR="${WANWANDEQU_CONFIG_DIR:-$HOME/.omp-wanwandequ}"
+
+case "$(uname -s)" in
+  Linux) platform="linux" ;;
+  Darwin) platform="darwin" ;;
+  *) echo "[WQ] unsupported OS: $(uname -s)" >&2; exit 1 ;;
+esac
+
+case "$(uname -m)" in
+  x86_64|amd64) arch="x64" ;;
+  arm64|aarch64) arch="arm64" ;;
+  *) echo "[WQ] unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+asset="omp-wanwandequ-${platform}-${arch}"
+base="https://github.com/${REPO}/releases/download/${TAG}"
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
+
+tmp="$(mktemp "${TMPDIR:-/tmp}/omp-wanwandequ.XXXXXX")"
+checksum="${tmp}.sha256"
+cleanup() { rm -f "$tmp" "$checksum"; }
+trap cleanup EXIT
+
+printf '[WQ] Wanwandequ · downloading %s (%s/%s)\n' "$TAG" "$platform" "$arch"
+curl -fsSL --retry 4 --retry-all-errors --connect-timeout 10 "${base}/${asset}" -o "$tmp"
+curl -fsSL --retry 4 --retry-all-errors --connect-timeout 10 "${base}/${asset}.sha256" -o "$checksum"
+expected="$(awk '{print tolower($1)}' "$checksum")"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmp" | awk '{print tolower($1)}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmp" | awk '{print tolower($1)}')"
+else
+  echo "[WQ] sha256sum or shasum is required" >&2
+  exit 1
+fi
+[[ "$actual" == "$expected" ]] || { echo "[WQ] SHA256 mismatch" >&2; exit 1; }
+
+chmod +x "$tmp"
+mv -f "$tmp" "${INSTALL_DIR}/omp-wanwandequ"
+rm -f "$checksum"
+trap - EXIT
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *)
+    path_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+    shell_name="$(basename "${SHELL:-bash}")"
+    case "$shell_name" in
+      zsh) profile="$HOME/.zshrc" ;;
+      *) profile="$HOME/.bashrc" ;;
+    esac
+    touch "$profile"
+    grep -Fq "$path_line" "$profile" 2>/dev/null || printf '\n%s\n' "$path_line" >> "$profile"
+    ;;
+esac
+
+printf '[WQ] installed: %s\n' "${INSTALL_DIR}/omp-wanwandequ"
+printf '[WQ] config:    %s\n' "$CONFIG_DIR"
+printf '[WQ] next:      omp-wanwandequ\n'
+"${INSTALL_DIR}/omp-wanwandequ" doctor
